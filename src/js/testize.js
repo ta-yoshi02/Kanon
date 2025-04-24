@@ -22,6 +22,7 @@ __$__.Testize = {
     testNodeCounter: 0,
     enable: false,
     storedTest: {},
+    storedtext: [],
     storedActualGraph: {},
     window: {},
     network: {
@@ -525,6 +526,71 @@ __$__.Testize = {
     },
 
 
+    synthesize() {
+        const operations = [];
+        const codeLines = [];
+
+        // メソッド呼び出し別のコードを生成
+        for (const callLabel in __$__.Testize.storedTest) {
+            for (const contextID in __$__.Testize.storedTest[callLabel]) {
+                if (contextID === 'markerInfo') continue;
+
+                const test = __$__.Testize.storedTest[callLabel][contextID];
+                if (!test.operations || !Array.isArray(test.operations)) continue;
+
+                const methodOperations = test.operations;
+
+                codeLines.push(`// ${callLabel} メソッド呼び出し（コンテキスト: ${contextID}）`);
+                codeLines.push(`function ${callLabel.replace(/[^a-zA-Z0-9_]/g, '_')}_${contextID}() {`);
+
+                const methodCodeLines = methodOperations.map(op => {
+                    if (op.editType === "addNode") {
+                        return `  ${op.isLiteral
+                            ? `var ${op.id} = ${op.label};`
+                            : `var ${op.id} = new ${op.label}();`}`;
+                    } else if (op.editType === "addEdge" || op.editType === "editEdgeReference") {
+                        return `  ${op.from}.${op.label} = ${op.to || op.newTo};`;
+                    } else if (op.editType === "editVariableReference") {
+                        return `  ${op.oldTo} = ${op.newTo};`;
+                    }
+                    return `  // ${op.editType} operation`;
+                });
+
+                codeLines.push(methodCodeLines.join('\n'));
+                codeLines.push(`}\n`);
+
+                operations.push(...methodOperations);
+            }
+        }
+
+        fetch("http://localhost:3030/synthesize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+                operations, 
+                code_lines: codeLines
+            })
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data && data.code) {
+                console.log("合成結果:", data.code);
+                __$__.editor.session.insert(__$__.editor.getCursorPosition(), data.code + "\n");
+            } else {
+                console.warn("合成結果なし");
+            }
+        })
+        .catch(err => {
+            console.error("合成中にエラー:", err);
+        });
+    },
+
+
     /**
      * @param {string} editType
      * @param {Object} data
@@ -554,6 +620,13 @@ __$__.Testize = {
                     type: data.type
                 };
                 __$__.Testize.focusedTestOperations.push(ope);
+                if(ope.isLiteral){
+                    console.log('var ' + ope.id + ' = ' + ope.label + ';');
+                    __$__.Testize.storedtext.push('var ' + ope.id + ' = ' + ope.label + ';');
+                }else{
+                    console.log('var ' + ope.id + ' = new ' + ope.label + '();');
+                    __$__.Testize.storedtext.push('var ' + ope.id + ' = new ' + ope.label + '();');
+                }
                 break;
             }
             case 'editNode': {
@@ -583,6 +656,8 @@ __$__.Testize = {
                     label: data.label
                 };
                 __$__.Testize.focusedTestOperations.push(ope);
+                console.log(ope.from + '.' + ope.label + ' = ' + ope.to + ';');
+                __$__.Testize.storedtext.push(ope.from + '.' + ope.label + ' = ' + ope.to + ';');
                 break;
             }
             case 'editEdgeReference': {
@@ -595,6 +670,8 @@ __$__.Testize = {
                     label: data.label
                 };
                 __$__.Testize.focusedTestOperations.push(ope);
+                console.log(ope.from + '.' + ope.label + ' = ' + ope.newTo + ';');
+                __$__.Testize.storedtext.push(ope.from + '.' + ope.label + ' = ' + ope.newTo + ';');
                 break;
             }
             case 'editEdgeLabel': {
@@ -657,7 +734,8 @@ __$__.Testize = {
                 break;
             }
         }
-        // console.log(...__$__.Testize.focusedTestOperations);
+        console.log(...__$__.Testize.focusedTestOperations);
+        console.log(__$__.Testize.storedtext);
     },
 
 
