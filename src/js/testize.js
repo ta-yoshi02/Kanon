@@ -527,10 +527,11 @@ __$__.Testize = {
 
 
     synthesize() {
+        // 操作データを収集する
         const operations = [];
         const codeLines = [];
-
-        // メソッド呼び出し別のコードを生成
+        
+        // メソッド呼び出し別のコードを取得し、そのまま送信
         for (const callLabel in __$__.Testize.storedTest) {
             for (const contextID in __$__.Testize.storedTest[callLabel]) {
                 if (contextID === 'markerInfo') continue;
@@ -538,31 +539,15 @@ __$__.Testize = {
                 const test = __$__.Testize.storedTest[callLabel][contextID];
                 if (!test.operations || !Array.isArray(test.operations)) continue;
 
-                const methodOperations = test.operations;
-
+                // 操作データを追加
+                operations.push(...test.operations);
+                
+                // 元のコード行も取得
                 codeLines.push(`// ${callLabel} メソッド呼び出し（コンテキスト: ${contextID}）`);
-                codeLines.push(`function ${callLabel.replace(/[^a-zA-Z0-9_]/g, '_')}_${contextID}() {`);
-
-                const methodCodeLines = methodOperations.map(op => {
-                    if (op.editType === "addNode") {
-                        return `  ${op.isLiteral
-                            ? `var ${op.id} = ${op.label};`
-                            : `var ${op.id} = new ${op.label}();`}`;
-                    } else if (op.editType === "addEdge" || op.editType === "editEdgeReference") {
-                        return `  ${op.from}.${op.label} = ${op.to || op.newTo};`;
-                    } else if (op.editType === "editVariableReference") {
-                        return `  ${op.oldTo} = ${op.newTo};`;
-                    }
-                    return `  // ${op.editType} operation`;
-                });
-
-                codeLines.push(methodCodeLines.join('\n'));
-                codeLines.push(`}\n`);
-
-                operations.push(...methodOperations);
             }
         }
 
+        // 操作データとコード行の情報をそのままサーバーに送信
         fetch("http://localhost:3030/synthesize", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
