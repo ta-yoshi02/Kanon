@@ -527,34 +527,45 @@ __$__.Testize = {
 
 
     synthesize() {
-        // 操作データを収集する
-        const operations = [];
-        const codeLines = [];
+        // メソッド呼び出しごとに操作をまとめる
+        const methodCalls = [];
         
-        // メソッド呼び出し別のコードを取得し、そのまま送信
         for (const callLabel in __$__.Testize.storedTest) {
             for (const contextID in __$__.Testize.storedTest[callLabel]) {
                 if (contextID === 'markerInfo') continue;
 
                 const test = __$__.Testize.storedTest[callLabel][contextID];
                 if (!test.operations || !Array.isArray(test.operations)) continue;
-
-                // 操作データを追加
-                operations.push(...test.operations);
                 
-                // 元のコード行も取得
-                codeLines.push(`// ${callLabel} メソッド呼び出し（コンテキスト: ${contextID}）`);
+                // receiverを特定（main-new1など）
+                let receiverObject = "main-new1"; // デフォルト値
+                // 操作から自動検出する場合
+                for (const op of test.operations) {
+                    if (op.from && op.from.startsWith("main-new")) {
+                        receiverObject = op.from;
+                        break;
+                    }
+                }
+                
+                // メソッド名を取得（appendなど）
+                const methodName = callLabel.split('.').pop() || "unknown";
+                
+                // 1つのメソッド呼び出しとして追加
+                methodCalls.push({
+                    callLabel: callLabel,
+                    contextSensitiveID: contextID,
+                    receiverObject: receiverObject,
+                    methodName: methodName,
+                    operations: test.operations
+                });
             }
         }
 
-        // 操作データとコード行の情報をそのままサーバーに送信
+        // サーバーへ送信
         fetch("http://localhost:3030/synthesize", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
-                operations, 
-                code_lines: codeLines
-            })
+            body: JSON.stringify({ method_calls: methodCalls })
         })
         .then(response => {
             if (!response.ok) {
@@ -565,7 +576,40 @@ __$__.Testize = {
         .then(data => {
             if (data && data.code) {
                 console.log("合成結果:", data.code);
-                __$__.editor.session.insert(__$__.editor.getCursorPosition(), data.code + "\n");
+                
+                // メソッド呼び出しごとのコードも表示
+                if (data.individual_codes) {
+                    console.log("個別メソッド呼び出しのコード:");
+                    data.individual_codes.forEach((code, index) => {
+                        const methodCall = methodCalls[index];
+                        console.log(`--- ${methodCall.callLabel} (${methodCall.contextSensitiveID}) ---`);
+                        console.log(code);
+                    });
+                }
+                
+                // 結果をエディタに挿入
+                let resultText = "";
+                
+                // 個別のコードを先に表示
+                if (data.individual_codes) {
+                    methodCalls.forEach((call, idx) => {
+                        resultText += `// ${call.callLabel}\n${data.individual_codes[idx]}\n\n`;
+                    });
+                }
+                
+                // 共通パターンとホール情報も表示
+                if (data.common_pattern) {
+                    resultText += "// 共通パターン (ホール表現):\n" + data.common_pattern + "\n\n";
+                }
+                
+                if (data.hole_information) {
+                    resultText += "// ホール情報:\n";
+                    for (const [holeKey, values] of Object.entries(data.hole_information)) {
+                        resultText += `// ${holeKey}: ${JSON.stringify(values)}\n`;
+                    }
+                }
+                
+                __$__.editor.session.insert(__$__.editor.getCursorPosition(), resultText);
             } else {
                 console.warn("合成結果なし");
             }
