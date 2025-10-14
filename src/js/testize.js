@@ -526,10 +526,26 @@ __$__.Testize = {
     },
 
 
+    toPlainVisGraph(visData) {
+        if (!visData || !visData.nodes || !visData.edges) {
+            return { nodes: [], edges: [] };
+        }
+
+        const toArray = dataSet =>
+            Object.values(dataSet._data || {}).map(item => jQuery.extend(true, {}, item));
+
+        return {
+            nodes: toArray(visData.nodes),
+            edges: toArray(visData.edges)
+        };
+    },
+
+
     synthesize() {
         // メソッド呼び出しごとに操作をまとめる
         const methodCalls = [];
-        
+        let visGraphPayload = null;
+
         for (const callLabel in __$__.Testize.storedTest) {
             for (const contextID in __$__.Testize.storedTest[callLabel]) {
                 if (contextID === 'markerInfo') continue;
@@ -549,23 +565,55 @@ __$__.Testize = {
                 
                 // メソッド名を取得（appendなど）
                 const methodName = callLabel.split('.').pop() || "unknown";
-                
+
+                // Kanon の期待グラフ（vis.js DataSet）を plain object に変換
+                if (!visGraphPayload && test.testData) {
+                    visGraphPayload = __$__.Testize.toPlainVisGraph(test.testData);
+                }
+
+                // 実行時グラフ（存在する場合）を clone
+                let actualGraphPayload;
+                if (__$__.Testize.storedActualGraph[callLabel] && __$__.Testize.storedActualGraph[callLabel][contextID]) {
+                    actualGraphPayload = jQuery.extend(true, {}, __$__.Testize.storedActualGraph[callLabel][contextID]);
+                }
+
                 // 1つのメソッド呼び出しとして追加
-                methodCalls.push({
+                const methodCallEntry = {
                     callLabel: callLabel,
                     contextSensitiveID: contextID,
                     receiverObject: receiverObject,
                     methodName: methodName,
                     operations: test.operations
+                };
+
+                if (actualGraphPayload) {
+                    methodCallEntry.actualGraph = actualGraphPayload;
+                }
+
+                methodCalls.push(methodCallEntry);
+            }
+        }
+
+        // vis_graph が未設定の場合は、現在のテストグラフを直接取得
+        if (!visGraphPayload && __$__.Testize.network && __$__.Testize.network.network) {
+            const networkData = __$__.Testize.network.network.body && __$__.Testize.network.network.body.data;
+            if (networkData && networkData.nodes && networkData.edges) {
+                visGraphPayload = __$__.Testize.toPlainVisGraph({
+                    nodes: networkData.nodes,
+                    edges: networkData.edges
                 });
             }
+        }
+
+        if (!visGraphPayload) {
+            visGraphPayload = { nodes: [], edges: [] };
         }
 
         // サーバーへ送信
         fetch("http://localhost:3030/synthesize", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ method_calls: methodCalls })
+            body: JSON.stringify({ method_calls: methodCalls, vis_graph: visGraphPayload })
         })
         .then(response => {
             if (!response.ok) {
