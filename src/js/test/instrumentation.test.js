@@ -457,6 +457,15 @@ describe('ast-transforms.js', () =>{
 	});
     });
 
+    describe('InsertCheckPoint', () => {
+	test('adds checkpoints to empty function bodies', () => {
+	    const transformed = escodegen.generate(
+		run_insertCheckPoint("function f(){}")
+	    );
+	    expect(transformed).toContain("__$__.Checkpoint.checkpoint");
+	});
+    });
+
     describe('Context',()=>{
 	describe('given a constructor declaration',()=>{
 	    xtest('to return an instrumented constructor',()=>{
@@ -1155,4 +1164,3 @@ describe('ast-transforms.js', () =>{
 	});
     })
 });
-

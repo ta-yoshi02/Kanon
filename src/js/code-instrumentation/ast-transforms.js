@@ -2337,23 +2337,16 @@ __$__.ASTTransforms = {
 				  && node.body.length > 0
 				  && this.isSuperStatement(node.body[0])) 
 				 ? [node.body.shift()] : [] );
-		if (node.body.length === 0) {
-		    // if the constructor is empty or has only a super
-		    // call, just return the original node.
-		    node.body.unshift(...beforeCP);
-		    return node;
-		} else {
-                    __$__.ASTTransforms.pairCPID[__$__.ASTTransforms.checkPoint_idCounter] = __$__.ASTTransforms.checkPoint_idCounter + 1;
-                    __$__.ASTTransforms.pairCPID[__$__.ASTTransforms.checkPoint_idCounter + 1] = __$__.ASTTransforms.checkPoint_idCounter;
-                    return b.BlockStatement(
-			beforeCP.concat(
-			    [__$__.ASTTransforms.changedGraphStmt(),
-			     __$__.ASTTransforms.makeCheckpoint(start, variables),
-			     node,
-			     __$__.ASTTransforms.changedGraphStmt(),
-			     __$__.ASTTransforms.makeCheckpoint(end, variables)
-			    ]));
-		}
+                __$__.ASTTransforms.pairCPID[__$__.ASTTransforms.checkPoint_idCounter] = __$__.ASTTransforms.checkPoint_idCounter + 1;
+                __$__.ASTTransforms.pairCPID[__$__.ASTTransforms.checkPoint_idCounter + 1] = __$__.ASTTransforms.checkPoint_idCounter;
+                return b.BlockStatement(
+		    beforeCP.concat(
+			[__$__.ASTTransforms.changedGraphStmt(),
+			 __$__.ASTTransforms.makeCheckpoint(start, variables),
+			 node,
+			 __$__.ASTTransforms.changedGraphStmt(),
+			 __$__.ASTTransforms.makeCheckpoint(end, variables)
+			]));
 	    },
 	    // transform all other kinds of statements, including
 	    // super call statements
