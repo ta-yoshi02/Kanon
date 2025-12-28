@@ -624,40 +624,74 @@ __$__.Testize = {
         .then(data => {
             if (data && data.code) {
                 console.log("合成結果:", data.code);
-                
+
                 // メソッド呼び出しごとのコードも表示
-                if (data.individual_codes) {
+                if (data.individual_codes && data.individual_codes.length) {
                     console.log("個別メソッド呼び出しのコード:");
                     data.individual_codes.forEach((code, index) => {
                         const methodCall = methodCalls[index];
-                        console.log(`--- ${methodCall.callLabel} (${methodCall.contextSensitiveID}) ---`);
+                        if (methodCall) {
+                            console.log(`--- ${methodCall.callLabel} (${methodCall.contextSensitiveID}) ---`);
+                        } else {
+                            console.log(`--- Result ${index + 1} ---`);
+                        }
                         console.log(code);
                     });
                 }
-                
+
                 // 結果をエディタに挿入
                 let resultText = "";
-                
-                // 個別のコードを先に表示
-                if (data.individual_codes) {
-                    methodCalls.forEach((call, idx) => {
-                        resultText += `// ${call.callLabel}\n${data.individual_codes[idx]}\n\n`;
+                const escherNames = Array.isArray(data.escher_results)
+                    ? data.escher_results.map(r => r && r.name)
+                    : [];
+
+                const appendSnippet = (label, code) => {
+                    if (!code) return;
+                    const header = label ? `// ${label}\n` : "";
+                    resultText += `${header}${code}\n\n`;
+                };
+
+                if (data.individual_codes && data.individual_codes.length) {
+                    if (data.individual_codes.length === methodCalls.length) {
+                        methodCalls.forEach((call, idx) => {
+                            appendSnippet(call.callLabel, data.individual_codes[idx]);
+                        });
+                    } else {
+                        data.individual_codes.forEach((code, idx) => {
+                            const label =
+                                escherNames[idx] ||
+                                (methodCalls[idx] && methodCalls[idx].callLabel) ||
+                                `Result ${idx + 1}`;
+                            appendSnippet(label, code);
+                        });
+                    }
+                } else if (Array.isArray(data.code) && data.code.length) {
+                    data.code.forEach((code, idx) => {
+                        const label =
+                            escherNames[idx] ||
+                            (methodCalls[idx] && methodCalls[idx].callLabel) ||
+                            `Result ${idx + 1}`;
+                        appendSnippet(label, code);
                     });
                 }
-                
+
                 // 共通パターンとホール情報も表示
                 if (data.common_pattern) {
                     resultText += "// 共通パターン (ホール表現):\n" + data.common_pattern + "\n\n";
                 }
-                
+
                 if (data.hole_information) {
                     resultText += "// ホール情報:\n";
                     for (const [holeKey, values] of Object.entries(data.hole_information)) {
                         resultText += `// ${holeKey}: ${JSON.stringify(values)}\n`;
                     }
                 }
-                
-                __$__.editor.session.insert(__$__.editor.getCursorPosition(), resultText);
+
+                if (resultText.length > 0) {
+                    __$__.editor.session.insert(__$__.editor.getCursorPosition(), resultText);
+                } else {
+                    console.warn("合成結果は取得したが、挿入可能なコードがありませんでした。");
+                }
             } else {
                 console.warn("合成結果なし");
             }

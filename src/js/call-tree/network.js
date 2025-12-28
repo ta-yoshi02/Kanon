@@ -53,10 +53,16 @@ __$__.CallTreeNetwork = {
             .attr('transform', d => 'translate(' + source.y0 + ',' + source.x0 + ')')
             .call(cc);
 
-        cc.on('click', d => {
+        cc.on('click', function(d) {
             let loopLabel = d.data.loopLabel;
-            if (loopLabel === 'main')
+            if (loopLabel === 'main') {
+                __$__.CallTreeNetwork.hideEditorWindow();
                 return;
+            }
+            if (__$__.ProgramSynth && typeof __$__.ProgramSynth.openRuntimeWindowFromCallTree === 'function')
+                __$__.ProgramSynth.openRuntimeWindowFromCallTree(d);
+            if (__$__.ProgramSynth && typeof __$__.ProgramSynth.logStoredGraph === 'function')
+                __$__.ProgramSynth.logStoredGraph(d.data.contextSensitiveID, loopLabel);
             __$__.Context.SpecifiedContext[loopLabel] = d.data.contextSensitiveID;
             if (!__$__.Error.hasError)
                 __$__.Context.SpecifiedContextWhenExecutable[loopLabel] = d.data.contextSensitiveID;
@@ -75,6 +81,7 @@ __$__.CallTreeNetwork = {
             __$__.Testize.updateMarker();
         });
         cc.on('dblclick', d => {
+            __$__.CallTreeNetwork.hideEditorWindow();
             if (__$__.CallTreeNetwork.whileDrawing === false) {
                 __$__.CallTreeNetwork.toggle(d);
                 __$__.CallTreeNetwork.update(d);
@@ -213,7 +220,7 @@ __$__.CallTreeNetwork = {
         if (__$__.CallTreeNetwork.whileDrawing === undefined) __$__.CallTreeNetwork.initialize();
 
         let data = __$__.CallTreeNetwork.data = {};
-        __$__.CallTreeNetwork.constructData(__$__.CallTree.rootNode, data);
+        __$__.CallTreeNetwork.constructData(__$__.CallTree.rootNode, data, undefined);
 
         let root = __$__.CallTreeNetwork.root = __$__.d3.hierarchy(data);
 
@@ -233,10 +240,16 @@ __$__.CallTreeNetwork = {
     },
 
 
-    constructData(node, data) {
+    constructData(node, data, parentContextSensitiveID) {
         data.name = node.getDisplayedLabel();
         data.contextSensitiveID = node.getContextSensitiveID();
         data.loopLabel = node.label;
+        if (parentContextSensitiveID) {
+            let relationship = __$__.Context.CallRelationship[parentContextSensitiveID];
+            if (relationship && relationship[data.contextSensitiveID]) {
+                data.callLabel = relationship[data.contextSensitiveID];
+            }
+        }
         if (node.children.length > 0) data.children = [];
         let children = [].concat(node.children);
         while (children.length > 0) {
@@ -247,7 +260,7 @@ __$__.CallTreeNetwork = {
             }
             let childData = {};
             data.children.push(childData);
-            __$__.CallTreeNetwork.constructData(child, childData);
+            __$__.CallTreeNetwork.constructData(child, childData, data.contextSensitiveID);
         }
     },
 
@@ -330,6 +343,18 @@ __$__.CallTreeNetwork = {
             };
         }
         return d3rebind(cc, dispatcher, 'on');
+    },
+
+    resolveCallLabel(sourceContext, targetContext) {
+        if (!sourceContext || !targetContext) return undefined;
+        let relationship = __$__.Context.CallRelationship[sourceContext];
+        if (!relationship) return undefined;
+        return relationship[targetContext];
+    },
+
+    hideEditorWindow() {
+        if (__$__.ProgramSynth && typeof __$__.ProgramSynth.hideWindow === 'function')
+            __$__.ProgramSynth.hideWindow();
     },
 
 
@@ -440,5 +465,3 @@ __$__.CallTreeNetwork = {
         }
     }
 };
-
-

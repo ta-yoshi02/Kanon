@@ -1,0 +1,58 @@
+.program-synth-header {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 6px 10px;
+    background-color: #f7f7f7;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+}
+
+.program-synth-body {
+    height: calc(100% - 42px);
+}
+
+.program-synth-btn {
+    padding: 4px 12px;
+    border: 1px solid #777;
+    border-radius: 4px;
+    background-color: #ffffff;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.program-synth-btn:hover {
+    background-color: #e6e6e6;
+}
+
+.program-synth-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.program-synth-popup {
+    display: none;
+    position: absolute;
+    font-size: 12px;
+    top: 30px;
+    right: 16px;
+    z-index: 350;
+    width: 220px;
+    height: 120px;
+    background-color: #f9f9f9;
+    border: 2px solid #5394ed;
+    padding: 10px;
+    text-align: center;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    border-radius: 4px;
+}
+
+.program-synth-popup input[type="text"],
+.program-synth-popup input[type="button"] {
+    font-size: 12px;
+}
+
+.program-synth-popup table {
+    margin: auto;
+}

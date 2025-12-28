@@ -21,12 +21,33 @@ __$__.Traverse = {
         }
 
         Object.keys(variables).forEach(key => {
-            if (variables[key] && variables[key].__id/* && graphNodes[variables[key].__id]*/) {
-                let tempNode = new __$__.StoredGraphFormat.VariableNode(key);
-                let tempEdge = new __$__.StoredGraphFormat.Edge(tempNode.id, variables[key].__id, key);
+            let value = variables[key];
+            if (value === undefined || value === null)
+                return;
 
-                retGraph.pushNode(tempNode);
-                retGraph.pushEdge(tempEdge);
+            if (value.__id) {
+                let variableNode = new __$__.StoredGraphFormat.VariableNode(key);
+                let variableEdge = new __$__.StoredGraphFormat.Edge(variableNode.id, value.__id, key);
+
+                retGraph.pushNode(variableNode);
+                retGraph.pushEdge(variableEdge);
+            } else if (__$__.Traverse.literals[typeof value]) {
+                let variableNode = new __$__.StoredGraphFormat.VariableNode(key);
+                let literalNodeID = '__VariableLiteral-' + key;
+                let literalNode = new __$__.StoredGraphFormat.Node(
+                    literalNodeID,
+                    value,
+                    true,
+                    typeof value
+                );
+
+                retGraph.pushNode(literalNode);
+                retGraph.pushNode(variableNode);
+                retGraph.pushEdge(new __$__.StoredGraphFormat.Edge(
+                    variableNode.id,
+                    literalNodeID,
+                    key
+                ));
             }
         });
 
