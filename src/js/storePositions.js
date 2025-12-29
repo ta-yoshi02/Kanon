@@ -6,6 +6,7 @@ __$__.StorePositions = {
         _edgesData: {}
     },
     positionsOfExpectedStructure: undefined,
+    positionsOfProgramSynth: undefined,
 
 
     // if nodePositions have the position of node.id, set the position at graph.node.
@@ -14,9 +15,11 @@ __$__.StorePositions = {
             let node = graph.nodes[nodeID];
             let nodeData = __$__.StorePositions.oldNetwork.nodes[nodeID];
             let posOfExpStr = __$__.StorePositions.positionsOfExpectedStructure;
+            let posOfProgramSynth = __$__.StorePositions.positionsOfProgramSynth;
 
-            if (!positionUpdate && posOfExpStr && posOfExpStr[node.id]){
-
+            if (!positionUpdate && posOfProgramSynth && posOfProgramSynth[node.id]) {
+                graph.setLocation(nodeID, posOfProgramSynth[nodeID].x, posOfProgramSynth[nodeID].y);
+            } else if (!positionUpdate && posOfExpStr && posOfExpStr[node.id]){
                 graph.setLocation(nodeID, posOfExpStr[nodeID].x, posOfExpStr[nodeID].y);
             } else if (nodeData && nodeData.x !== undefined) {
                 graph.setLocation(nodeID, nodeData.x, nodeData.y);
@@ -56,12 +59,30 @@ __$__.StorePositions = {
         __$__.StorePositions.positionsOfExpectedStructure = __$__.Testize.network.network.getPositions();
     },
 
+    registerPositionsOfProgramSynth(positions) {
+        if (positions) {
+            __$__.StorePositions.positionsOfProgramSynth = positions;
+            return;
+        }
+        if (__$__.ProgramSynth && __$__.ProgramSynth.network && typeof __$__.ProgramSynth.network.getPositions === 'function') {
+            __$__.StorePositions.positionsOfProgramSynth = __$__.ProgramSynth.network.getPositions();
+        }
+    },
+
 
     updateIDForExpectedStructure(oldID, newID) {
         let posOfExpStr = __$__.StorePositions.positionsOfExpectedStructure;
         if (posOfExpStr && !posOfExpStr[newID]) {
             posOfExpStr[newID] = posOfExpStr[oldID];
             delete posOfExpStr[oldID];
+        }
+    },
+
+    updateIDForProgramSynth(oldID, newID) {
+        let posOfProgramSynth = __$__.StorePositions.positionsOfProgramSynth;
+        if (posOfProgramSynth && !posOfProgramSynth[newID]) {
+            posOfProgramSynth[newID] = posOfProgramSynth[oldID];
+            delete posOfProgramSynth[oldID];
         }
     }
 };

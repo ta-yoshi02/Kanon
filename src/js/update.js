@@ -6,7 +6,7 @@ __$__.Update = {
     onlyMoveCursor: false,
 
     // this function is called when ace editor is edited.
-    PositionUpdate: function(__arg__) {
+    PositionUpdate: function (__arg__) {
 
         var PositionUpdateStartTime = performance.now();
 
@@ -49,7 +49,7 @@ __$__.Update = {
                 var evalCodeWithCPStartTime = performance.now();
                 //console.log(__$__.Update.CodeWithCP);
                 //console.log(__$__.ASTTransforms.varEnv.Variables());    //ここで呼び出せばグローバル変数が得られる？
-                (() => {eval(__$__.Update.CodeWithCP)})();              //ここにすごく時間がかかっている
+                (() => { eval(__$__.Update.CodeWithCP) })();              //ここにすごく時間がかかっている
                 var evalCodeWithCPEndTime = performance.now();
                 console.log("evalCodeWithCP\n   " + (evalCodeWithCPEndTime - evalCodeWithCPStartTime) + " ms");
 
@@ -59,13 +59,13 @@ __$__.Update = {
                 __$__.Context.InfLoop = '';
                 if (__$__.Error.hasError && __$__.Context.SpecifiedContextWhenExecutable) {
                     Object.keys(__$__.Context.SpecifiedContext).forEach(loopLabel => {
-                        __$__.Context.SpecifiedContextWhenExecutable[loopLabel] = __$__.Context.SpecifiedContextWhenExecutable[loopLabel] ||  __$__.Context.SpecifiedContext[loopLabel];
+                        __$__.Context.SpecifiedContextWhenExecutable[loopLabel] = __$__.Context.SpecifiedContextWhenExecutable[loopLabel] || __$__.Context.SpecifiedContext[loopLabel];
                     });
                     __$__.Context.SpecifiedContext = __$__.Context.SpecifiedContextWhenExecutable;
                 }
                 __$__.Error.hasError = false;
                 document.getElementById('console').textContent = '';
-                 __$__.Context.InfLoop = '';
+                __$__.Context.InfLoop = '';
             } catch (e) {
                 __$__.Error.hasError = true;
                 if (e === 'Infinite Loop') {
@@ -108,6 +108,12 @@ __$__.Update = {
             __$__.ObjectGraphNetwork.options.edges.hidden = true;
             __$__.StorePositions.setPositions(graph, true);
             let visGraph = graph.generateVisjsGraph(false);
+
+            if (__$__.ProgramSynth && typeof __$__.ProgramSynth.mergeEditsIntoGlobalGraph === 'function') {
+                console.log('[Update] Calling mergeEditsIntoGlobalGraph');
+                __$__.ProgramSynth.mergeEditsIntoGlobalGraph(visGraph);
+            }
+
             __$__.ObjectGraphNetwork.network.setOptions(__$__.ObjectGraphNetwork.options);
             __$__.ObjectGraphNetwork.network.setData({
                 nodes: __$__.ObjectGraphNetwork.nodes = new vis.DataSet(visGraph.nodes),
@@ -119,7 +125,7 @@ __$__.Update = {
 
             if (__$__.Update.useBoxToVisualizeArray)
                 __$__.Context.Arrays.forEach(array => {
-                    if (array.length >= 0) __$__.Update.updateArrayPosition({nodes: [array[0]]});
+                    if (array.length >= 0) __$__.Update.updateArrayPosition({ nodes: [array[0]] });
                 });
 
             __$__.Update.waitForStabilized = true;
@@ -138,13 +144,13 @@ __$__.Update = {
         var PositionUpdateEndTime = performance.now();
         console.log("PositionUpdate\n   " + (PositionUpdateEndTime - PositionUpdateStartTime) + " ms");
     },
-    
+
 
     /**
      * This function is called when the cursor position in ace editor is changed.
      * This update the network with the context at the cursor position.
      */
-    ContextUpdate: function(e) {
+    ContextUpdate: function (e) {
 
         var ContextUpdateStartTime = performance.now();
 
@@ -182,11 +188,11 @@ __$__.Update = {
      * return true if new graph is different from old graph
      * return false otherwise
      */
-    isChange: function(graph, snapshot = false) {
+    isChange: function (graph, snapshot = false) {
         let graphNodes = graph.nodes.map(node => {
             if (snapshot)
                 return [node.id, node.label, node.color];
-            else 
+            else
                 return [node.id, node.label];
         });
         let graphEdges = graph.edges.map(edge => {
@@ -219,12 +225,12 @@ __$__.Update = {
             else if (temp[key].from.slice(0, 11) !== '__Variable-')
                 networkEdges.push([temp[key].from, temp[key].to, temp[key].label]);
         });
-    
-    
+
+
         return (!Boolean(networkNodes) ||
-                !Boolean(networkEdges) ||
-                JSON.stringify(graphNodes.sort()) !== JSON.stringify(networkNodes.sort()) ||
-                JSON.stringify(graphEdges.sort()) !== JSON.stringify(networkEdges.sort()));
+            !Boolean(networkEdges) ||
+            JSON.stringify(graphNodes.sort()) !== JSON.stringify(networkNodes.sort()) ||
+            JSON.stringify(graphEdges.sort()) !== JSON.stringify(networkEdges.sort()));
     },
 
 
@@ -234,11 +240,11 @@ __$__.Update = {
      * In this function, update the positions of newLabel, loopLabel and callLabel.
      * If user code is edited, this function is executed.
      */
-    UpdateLabelPositions: function(editEvent) {
-        let start = {line: editEvent.start.row + 1, column: editEvent.start.column};
-        let end = {line: editEvent.end.row + 1, column: editEvent.end.column};
+    UpdateLabelPositions: function (editEvent) {
+        let start = { line: editEvent.start.row + 1, column: editEvent.start.column };
+        let end = { line: editEvent.end.row + 1, column: editEvent.end.column };
         let compare = __$__.UpdateLabelPos.ComparePosition;
-    
+
         if (editEvent.action === 'insert') {
             // update
             Object.keys(__$__.Context.LabelPos).forEach(kind => {
@@ -248,11 +254,11 @@ __$__.Update = {
 
                     // register position of this node to the table for when editing the boundary.
                     __$__.UpdateLabelPos.table.get(pos.start.line, pos.start.column)[label] = {
-                        pairPos: {line: pos.end.line, column: pos.end.column},
+                        pairPos: { line: pos.end.line, column: pos.end.column },
                         kind: kind
                     };
                     __$__.UpdateLabelPos.table.get(pos.end.line, pos.end.column)[label] = {
-                        pairPos: {line: pos.start.line, column: pos.start.column},
+                        pairPos: { line: pos.start.line, column: pos.start.column },
                         kind: kind
                     };
                 });
@@ -270,11 +276,11 @@ __$__.Update = {
 
                         // register position of this node to the table for when editing the boundary.
                         __$__.UpdateLabelPos.table.get(pos.start.line, pos.start.column)[label] = {
-                            pairPos: {line: pos.end.line, column: pos.end.column},
+                            pairPos: { line: pos.end.line, column: pos.end.column },
                             kind: kind
                         };
                         __$__.UpdateLabelPos.table.get(pos.end.line, pos.end.column)[label] = {
-                            pairPos: {line: pos.start.line, column: pos.start.column},
+                            pairPos: { line: pos.start.line, column: pos.start.column },
                             kind: kind
                         };
                     }
@@ -322,7 +328,7 @@ __$__.Update = {
                 if (__$__.ObjectGraphNetwork.nodes._data[edge.to].isLiteral) {
                     let pos = __$__.ObjectGraphNetwork.network.getPositions(edge.from)[edge.from];
                     __$__.ObjectGraphNetwork.network.moveNode(edge.to, pos.x, pos.y + 100);
-                    __$__.ObjectGraphNetwork.nodes.update({id: edge.to, fixed: true});
+                    __$__.ObjectGraphNetwork.nodes.update({ id: edge.to, fixed: true });
                 }
             }
         });

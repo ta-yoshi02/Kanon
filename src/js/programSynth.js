@@ -295,7 +295,7 @@ __$__.ProgramSynth = {
         applyButton.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
-            __$__.ProgramSynth.applyEdits();
+            __$__.ProgramSynth.acceptEdits();
         });
 
         this.attachNetworkEvents();
@@ -925,6 +925,272 @@ __$__.ProgramSynth = {
         console.log('[ProgramSynth] saved runtime graph', this.lastResult);
     },
 
+    acceptEdits() {
+        this.applyEdits();
+        this.registerPositionsOfRuntimeGraph();
+        this.requestUpdate();
+    },
+
+    registerPositionsOfRuntimeGraph() {
+        if (!this.network || typeof this.network.getPositions !== 'function')
+            return;
+        if (!__$__.StorePositions || typeof __$__.StorePositions.registerPositionsOfProgramSynth !== 'function')
+            return;
+        let positions = this.network.getPositions();
+        __$__.StorePositions.registerPositionsOfProgramSynth(positions);
+    },
+
+    requestUpdate() {
+        if (!__$__.Update || typeof __$__.Update.PositionUpdate !== 'function')
+            return;
+        __$__.Update.PositionUpdate([{
+            start: { row: 0, column: 0 },
+            end: { row: 0, column: 0 },
+            lines: [''],
+            action: 'insert'
+        }]);
+    },
+
+    hasSavedEdits(callLabel, contextSensitiveID) {
+        return !!this.getLatestEditData(callLabel, contextSensitiveID);
+    },
+
+    getLatestEditData(callLabel, contextSensitiveID) {
+        if (!callLabel || !contextSensitiveID) return undefined;
+        let editsByCall = this.savedEdits && this.savedEdits[callLabel];
+        if (!editsByCall) return undefined;
+        let editsByContext = editsByCall[contextSensitiveID];
+        if (!editsByContext) return undefined;
+        let latest = this.selectLatestEdit(editsByContext);
+        return latest && latest.data ? latest.data : undefined;
+    },
+
+    extractUsedClassNames(callLabel, contextSensitiveID) {
+        let entry = this.getLatestEditData(callLabel, contextSensitiveID);
+        if (!entry) return [];
+        let nodes = this.normalizeVisItems(entry.nodes || []);
+        let retObj = {};
+        nodes.forEach(node => {
+            if (!node || !node.id) return;
+            if (node.id.slice(0, 11) === '__Variable-' || node.id === '__RectForVariable__')
+                return;
+            if (node.id.slice(0, 6) === '__temp' && !node.isLiteral) {
+                retObj[node.label] = true;
+            }
+        });
+        return Object.keys(retObj);
+    },
+
+    buildOverrideGraph(entry) {
+        if (!entry || typeof vis === 'undefined' || !vis.DataSet) return undefined;
+        let nodes = this.cloneVisItems(entry.nodes || []);
+        let edges = this.cloneVisItems(entry.edges || []);
+        return {
+            nodes: new vis.DataSet(nodes),
+            edges: new vis.DataSet(edges)
+        };
+    },
+
+    testAndOverride(objects, probe, retObj, callLabel, contextSensitiveID, errorOccurred, classes) {
+        let entry = this.getLatestEditData(callLabel, contextSensitiveID);
+        if (!entry) {
+            return {
+                newObjects: [],
+                variableReferences: {}
+            };
+        }
+
+        let graphData = this.buildOverrideGraph(entry);
+        if (!graphData) {
+            return {
+                newObjects: [],
+                variableReferences: {}
+            };
+        }
+
+        return this.overrideRuntimeGraph(objects, probe, retObj, graphData, classes);
+    },
+
+    traverse(obj, referableObjects) {
+        if (obj.__id && !referableObjects[obj.__id]) {
+            referableObjects[obj.__id] = obj;
+        } else {
+            return;
+        }
+
+        Object.keys(obj).forEach(prop => {
+            if (prop.slice(0, 2) === '__')
+                return;
+
+            let to = obj[prop];
+            if (typeof to !== 'function' && to !== null && to !== undefined) {
+                if (!__$__.Traverse.literals[typeof to]) {
+                    __$__.ProgramSynth.traverse(to, referableObjects);
+                }
+            }
+
+            delete obj[prop];
+        });
+    },
+
+    overrideRuntimeGraph(objects, probe, retObj, graphData, classes) {
+        let variableReferences = {};
+        let newObjects = [];
+        let testData = graphData;
+
+        let edgeDir = {};
+        let varInfo = {};
+        let runtimeObjects = {};
+        Object.values(testData.edges._data).forEach(edge => {
+            let from = edge.from;
+            if (from.slice(0, 11) === '__Variable-') {
+                let variableName = edge.label;
+                let node = testData.nodes.get(edge.to);
+                if (!node) return;
+                varInfo[variableName] = {
+                    to: edge.to,
+                    label: variableName,
+                    isLiteral: node.isLiteral,
+                    type: node.type
+                };
+
+                if (edge.to.slice(0, 6) === '__temp' && !node.isLiteral) {
+                    let className = testData.nodes.get(edge.to).label;
+                    let newObject = Object.create(classes[className].prototype);
+                    Object.setProperty(newObject, '__id', edge.to);
+                    Object.setProperty(newObject, '__ClassName__', className);
+                    runtimeObjects[edge.to] = newObject;
+                    newObjects.push(newObject);
+                }
+            } else {
+                if (!edgeDir[from]) edgeDir[from] = [];
+                edgeDir[from].push({
+                    to: edge.to,
+                    label: edge.label
+                });
+            }
+        });
+
+        objects.concat(Object.values(probe)).forEach(obj => {
+            if (!obj || runtimeObjects[obj.__id] || obj === null || obj === undefined || obj === __$__.Update)
+                return;
+
+            __$__.ProgramSynth.traverse(obj, runtimeObjects);
+        });
+
+        let i = 0;
+        while (i < objects.length) {
+            let obj = objects[i];
+            if (testData.nodes._data[obj.__id]) {
+                i++;
+            } else {
+                objects.splice(i, 1);
+            }
+        }
+
+        let queueForSetProp = Object.values(runtimeObjects);
+        while (queueForSetProp.length > 0) {
+            let obj = queueForSetProp.shift();
+            let objectID = obj.__id;
+
+            if (edgeDir[objectID]) {
+                edgeDir[objectID].forEach(edge => {
+                    let nextObject;
+                    if (!runtimeObjects[edge.to]) {
+                        let newlyConstructedNode = testData.nodes.get(edge.to);
+                        if (!newlyConstructedNode.isLiteral) {
+                            nextObject = Object.create(classes[newlyConstructedNode.label].prototype);
+                            if (edge.to.slice(0, 6) !== '__temp') {
+                                let newID, i = 1;
+                                while (!newID) {
+                                    let candidate = '__temp' + i;
+                                    if (!testData.nodes.get(candidate)) newID = candidate;
+                                    i++;
+                                }
+                                let nodeInfo = testData.nodes.get(newlyConstructedNode.id);
+                                nodeInfo.id = newID;
+                                testData.nodes.add(nodeInfo);
+                                testData.nodes.remove(newlyConstructedNode.id);
+                                Object.values(testData.edges._data).forEach(edge => {
+                                    if (edge.from === newlyConstructedNode.id)
+                                        testData.edges.update({
+                                            id: edge.id,
+                                            from: newID
+                                        });
+                                    if (edge.to === newlyConstructedNode.id)
+                                        testData.edges.update({
+                                            id: edge.id,
+                                            to: newID
+                                        });
+                                });
+                                newlyConstructedNode = nodeInfo;
+                            }
+                            Object.setProperty(nextObject, '__id', newlyConstructedNode.id);
+                            Object.setProperty(nextObject, '__ClassName__', newlyConstructedNode.label);
+                            queueForSetProp.push(nextObject);
+                            runtimeObjects[nextObject.__id] = nextObject;
+                            newObjects.push(nextObject);
+                        } else {
+                            let literalNode = testData.nodes.get(edge.to);
+                            __$__.StorePositions.updateIDForProgramSynth(edge.to, obj.__id + '-' + edge.label);
+                            if (literalNode.type === 'number') {
+                                nextObject = Number(literalNode.label);
+                            } else {
+                                nextObject = literalNode.label;
+                            }
+                        }
+                    } else {
+                        nextObject = runtimeObjects[edge.to];
+
+                        if (!nextObject) {
+                            let literalNode = testData.nodes.get(edge.to);
+                            __$__.StorePositions.updateIDForProgramSynth(edge.to, obj.__id + '-' + edge.label);
+                            if (literalNode.type === 'number') {
+                                nextObject = Number(literalNode.label);
+                            } else {
+                                nextObject = literalNode.label;
+                            }
+                        }
+                    }
+                    obj[edge.label] = nextObject;
+                });
+            }
+        }
+
+        Object.keys(probe).forEach(v => {
+            if (v === 'this') return;
+            if (!varInfo[v]) return;
+            let object = probe[v];
+            if (!object || __$__.Traverse.literals[typeof object] || object.__id === varInfo[v].to) {
+                // do nothing
+            } else {
+                variableReferences[v] = runtimeObjects[varInfo[v].to];
+            }
+        });
+
+        Object.keys(varInfo).forEach(v => {
+            if (v === 'this') return;
+            if (!varInfo[v]) return;
+            else if (v === 'return') {
+                if (varInfo[v].isLiteral)
+                    if (varInfo[v].type === 'number')
+                        variableReferences.__retObj = parseFloat(testData.nodes.get(varInfo[v].to).label);
+                    else
+                        variableReferences.__retObj = testData.nodes.get(varInfo[v].to).label;
+                else
+                    variableReferences.__retObj = runtimeObjects[varInfo[v].to];
+            } else if (!probe[v] || __$__.Traverse.literals[typeof probe[v]]) {
+                if (varInfo[v] && varInfo[v].to)
+                    variableReferences[v] = runtimeObjects[varInfo[v].to];
+            }
+        });
+
+        return {
+            newObjects: newObjects,
+            variableReferences: variableReferences
+        };
+    },
+
     updateNodeCounter(graphData) {
         if (!graphData || !graphData.nodes) return;
         let nodes = [];
@@ -1366,6 +1632,277 @@ __$__.ProgramSynth = {
         this.infoLabel.textContent = parts.join(' / ');
     },
 
+    resolveReceiverObject(operations, graphData) {
+        let receiverObject = 'main-new1';
+        if (Array.isArray(operations)) {
+            for (let i = 0; i < operations.length; i++) {
+                let op = operations[i];
+                if (op && op.from && typeof op.from === 'string' && op.from.indexOf('main-new') === 0) {
+                    receiverObject = op.from;
+                    return receiverObject;
+                }
+            }
+        }
+
+        if (graphData && graphData.nodes) {
+            let nodes = this.normalizeVisItems(graphData.nodes);
+            for (let i = 0; i < nodes.length; i++) {
+                let node = nodes[i];
+                if (node && node.id && typeof node.id === 'string' && node.id.indexOf('main-new') === 0) {
+                    receiverObject = node.id;
+                    return receiverObject;
+                }
+            }
+        }
+
+        return receiverObject;
+    },
+
+    selectLatestEdit(editsByCheckpoint) {
+        if (!editsByCheckpoint || typeof editsByCheckpoint !== 'object') return undefined;
+        let keys = Object.keys(editsByCheckpoint);
+        if (!keys.length) return undefined;
+        let checkpointId = keys[keys.length - 1];
+        return {
+            checkpointId: checkpointId,
+            data: editsByCheckpoint[checkpointId]
+        };
+    },
+
+    buildActualGraphPayload(callLabel, contextSensitiveID, checkpointId) {
+        let graph = this.buildGraphFromContext(callLabel, contextSensitiveID, checkpointId);
+        if (!graph && this.currentContext && this.currentContext.contextSensitiveID === contextSensitiveID) {
+            graph = this.buildGraphFromContext(
+                callLabel || this.currentContext.callLabel,
+                contextSensitiveID,
+                this.currentContext.checkpointId
+            );
+        }
+        if (!graph) return undefined;
+        return this.toPlainVisGraph(graph);
+    },
+
+    toPlainVisGraph(graphData) {
+        if (!graphData) {
+            return { nodes: [], edges: [] };
+        }
+        return {
+            nodes: this.cloneVisItems(graphData.nodes || []),
+            edges: this.cloneVisItems(graphData.edges || [])
+        };
+    },
+
+    buildSynthesisPayload() {
+        let methodCalls = [];
+        let visGraphPayload = null;
+
+        let savedEdits = this.savedEdits || {};
+        Object.keys(savedEdits).forEach(callLabel => {
+            let contexts = savedEdits[callLabel] || {};
+            Object.keys(contexts).forEach(contextSensitiveID => {
+                let editsByCheckpoint = contexts[contextSensitiveID];
+                if (!editsByCheckpoint) return;
+                let latest = this.selectLatestEdit(editsByCheckpoint);
+                if (!latest || !latest.data) return;
+
+                let entry = latest.data;
+                let operations = Array.isArray(entry.operations) ? entry.operations : undefined;
+                if (!operations) return;
+
+                if (!visGraphPayload) {
+                    visGraphPayload = this.toPlainVisGraph(entry);
+                }
+
+                let methodName = (callLabel && typeof callLabel === 'string')
+                    ? (callLabel.split('.').pop() || 'unknown')
+                    : 'unknown';
+                let receiverObject = this.resolveReceiverObject(operations, entry);
+
+                let methodCallEntry = {
+                    callLabel: callLabel,
+                    contextSensitiveID: contextSensitiveID,
+                    receiverObject: receiverObject,
+                    methodName: methodName,
+                    operations: operations
+                };
+
+                let actualGraphPayload = this.buildActualGraphPayload(callLabel, contextSensitiveID, latest.checkpointId);
+                if (actualGraphPayload) {
+                    methodCallEntry.actualGraph = actualGraphPayload;
+                }
+
+                methodCalls.push(methodCallEntry);
+            });
+        });
+
+        if (methodCalls.length === 0 && this.currentContext && this.network && this.network.body && this.network.body.data) {
+            let nodes = this.cloneVisItems(this.network.body.data.nodes);
+            let edges = this.cloneVisItems(this.network.body.data.edges);
+            let operations = Array.isArray(this.currentOperations) ? this.currentOperations.slice() : [];
+
+            let callLabel = this.currentContext.callLabel;
+            let contextSensitiveID = this.currentContext.contextSensitiveID;
+            let checkpointId = this.currentContext.checkpointId;
+            let methodName = (callLabel && typeof callLabel === 'string')
+                ? (callLabel.split('.').pop() || 'unknown')
+                : 'unknown';
+            let receiverObject = this.resolveReceiverObject(operations, { nodes: nodes, edges: edges });
+
+            let methodCallEntry = {
+                callLabel: callLabel,
+                contextSensitiveID: contextSensitiveID,
+                receiverObject: receiverObject,
+                methodName: methodName,
+                operations: operations
+            };
+
+            let actualGraphPayload = this.buildActualGraphPayload(callLabel, contextSensitiveID, checkpointId);
+            if (actualGraphPayload) {
+                methodCallEntry.actualGraph = actualGraphPayload;
+            }
+
+            methodCalls.push(methodCallEntry);
+            if (!visGraphPayload) {
+                visGraphPayload = this.toPlainVisGraph({ nodes: nodes, edges: edges });
+            }
+        }
+
+        if (!visGraphPayload) {
+            if (this.network && this.network.body && this.network.body.data) {
+                visGraphPayload = this.toPlainVisGraph({
+                    nodes: this.network.body.data.nodes,
+                    edges: this.network.body.data.edges
+                });
+            } else if (this.currentContext) {
+                let fallbackGraph = this.buildGraphFromContext(
+                    this.currentContext.callLabel,
+                    this.currentContext.contextSensitiveID,
+                    this.currentContext.checkpointId
+                );
+                if (fallbackGraph) {
+                    visGraphPayload = this.toPlainVisGraph(fallbackGraph);
+                }
+            }
+        }
+
+        if (!visGraphPayload) {
+            visGraphPayload = { nodes: [], edges: [] };
+        }
+
+        return {
+            methodCalls: methodCalls,
+            visGraphPayload: visGraphPayload
+        };
+    },
+
+    synthesize() {
+        if (typeof this.buildSynthesisPayload !== 'function') {
+            console.warn('[ProgramSynth] buildSynthesisPayload is not available.');
+            return;
+        }
+
+        const payload = this.buildSynthesisPayload();
+        if (!payload) {
+            console.warn('[ProgramSynth] synthesis payload is empty.');
+            return;
+        }
+
+        const methodCalls = payload.methodCalls || [];
+        const visGraphPayload = payload.visGraphPayload || { nodes: [], edges: [] };
+
+        fetch('http://localhost:3030/synthesize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ method_calls: methodCalls, vis_graph: visGraphPayload })
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                this.applySynthesisResult(data, methodCalls);
+            })
+            .catch(err => {
+                console.error('[ProgramSynth] synthesis failed:', err);
+            });
+    },
+
+    applySynthesisResult(data, methodCalls) {
+        if (!data || !data.code) {
+            console.warn('[ProgramSynth] synthesis returned no result.');
+            return;
+        }
+
+        console.log('合成結果:', data.code);
+
+        if (data.individual_codes && data.individual_codes.length) {
+            console.log('個別メソッド呼び出しのコード:');
+            data.individual_codes.forEach((code, index) => {
+                const methodCall = methodCalls[index];
+                if (methodCall) {
+                    console.log(`--- ${methodCall.callLabel} (${methodCall.contextSensitiveID}) ---`);
+                } else {
+                    console.log(`--- Result ${index + 1} ---`);
+                }
+                console.log(code);
+            });
+        }
+
+        let resultText = '';
+        const escherNames = Array.isArray(data.escher_results)
+            ? data.escher_results.map(r => r && r.name)
+            : [];
+
+        const appendSnippet = (label, code) => {
+            if (!code) return;
+            const header = label ? `// ${label}\n` : '';
+            resultText += `${header}${code}\n\n`;
+        };
+
+        if (data.individual_codes && data.individual_codes.length) {
+            if (data.individual_codes.length === methodCalls.length) {
+                methodCalls.forEach((call, idx) => {
+                    appendSnippet(call.callLabel, data.individual_codes[idx]);
+                });
+            } else {
+                data.individual_codes.forEach((code, idx) => {
+                    const label =
+                        escherNames[idx] ||
+                        (methodCalls[idx] && methodCalls[idx].callLabel) ||
+                        `Result ${idx + 1}`;
+                    appendSnippet(label, code);
+                });
+            }
+        } else if (Array.isArray(data.code) && data.code.length) {
+            data.code.forEach((code, idx) => {
+                const label =
+                    escherNames[idx] ||
+                    (methodCalls[idx] && methodCalls[idx].callLabel) ||
+                    `Result ${idx + 1}`;
+                appendSnippet(label, code);
+            });
+        }
+
+        if (data.common_pattern) {
+            resultText += '// 共通パターン (ホール表現):\n' + data.common_pattern + '\n\n';
+        }
+
+        if (data.hole_information) {
+            resultText += '// ホール情報:\n';
+            for (const [holeKey, values] of Object.entries(data.hole_information)) {
+                resultText += `// ${holeKey}: ${JSON.stringify(values)}\n`;
+            }
+        }
+
+        if (resultText.length > 0) {
+            __$__.editor.session.insert(__$__.editor.getCursorPosition(), resultText);
+        } else {
+            console.warn('合成結果は取得したが、挿入可能なコードがありませんでした。');
+        }
+    },
+
     cloneVisItems(items) {
         let normalized = this.normalizeVisItems(items);
         if (!normalized.length) return [];
@@ -1397,6 +1934,92 @@ __$__.ProgramSynth = {
             }
         }
         return [];
+    },
+
+    selectLatestEdit(editsByCheckpoint) {
+        if (!editsByCheckpoint) return null;
+        let keys = Object.keys(editsByCheckpoint);
+        if (keys.length === 0) return null;
+        let checkpointId = keys[keys.length - 1];
+        return editsByCheckpoint[checkpointId];
+    },
+
+    mergeEditsIntoGlobalGraph(globalVisGraph) {
+        console.log('[ProgramSynth] mergeEditsIntoGlobalGraph called');
+        if (!globalVisGraph || !globalVisGraph.nodes || !globalVisGraph.edges) {
+            console.log('[ProgramSynth] mergeEditsIntoGlobalGraph: invalid globalVisGraph');
+            return;
+        }
+        if (!this.savedEdits) {
+            console.log('[ProgramSynth] mergeEditsIntoGlobalGraph: no savedEdits');
+            return;
+        }
+        console.log('[ProgramSynth] mergeEditsIntoGlobalGraph: savedEdits keys', Object.keys(this.savedEdits));
+
+        // Iterate through all saved edits across contexts
+        Object.keys(this.savedEdits).forEach(callLabel => {
+            let contexts = this.savedEdits[callLabel];
+            if (!contexts) return;
+            Object.keys(contexts).forEach(contextSensitiveID => {
+                let editsByContext = contexts[contextSensitiveID];
+                if (!editsByContext) return;
+
+                // Get the latest edit for this context
+                let latest = this.selectLatestEdit(editsByContext);
+                if (!latest || !latest.data) return;
+
+                let editNodes = latest.data.nodes;
+                let editEdges = latest.data.edges;
+
+                console.log('[ProgramSynth] merging context', { callLabel, contextSensitiveID, nodes: editNodes.length, edges: editEdges.length });
+
+                if (!editNodes || !editEdges) return;
+
+                // Merge nodes
+                editNodes.forEach(node => {
+                    if (!node || !node.id) return;
+                    let existingNode = globalVisGraph.nodes.find(n => n.id === node.id);
+                    if (existingNode) {
+                        // Update existing node properties
+                        ["label", "color", "shape", "isLiteral", "type", "hidden"].forEach(prop => {
+                            if (node[prop] !== undefined) existingNode[prop] = node[prop];
+                        });
+                        // Ensure literal nodes have correct shape/color if modified
+                        if (existingNode.isLiteral) {
+                            existingNode.color = existingNode.color || this.makeLiteralColor();
+                            // existingNode.shape = 'dot'; // Respect programSynth style if needed, but we removed forced dot
+                        }
+                    } else {
+                        // Add new node (e.g. manually added ones)
+                        // Make sure to clone to avoid reference issues
+                        let newNode = JSON.parse(JSON.stringify(node));
+                        // Remove fixed positions if merging into global graph where physics might be wanted, 
+                        // or keep them if we want exact placement. 
+                        // For now, let's keep them as the user likely placed them manually.
+                        globalVisGraph.nodes.push(newNode);
+                    }
+                });
+
+                // Merge edges
+                editEdges.forEach(edge => {
+                    if (!edge || !edge.from || !edge.to) return;
+                    // Check if edge already exists (by ID if available, or by content)
+                    let existingEdge = edge.id
+                        ? globalVisGraph.edges.find(e => e.id === edge.id)
+                        : globalVisGraph.edges.find(e => e.from === edge.from && e.to === edge.to && e.label === edge.label);
+
+                    if (existingEdge) {
+                        existingEdge.label = edge.label;
+                        existingEdge.color = edge.color;
+                        existingEdge.from = edge.from;
+                        existingEdge.to = edge.to;
+                    } else {
+                        let newEdge = JSON.parse(JSON.stringify(edge));
+                        globalVisGraph.edges.push(newEdge);
+                    }
+                });
+            });
+        });
     }
 };
 

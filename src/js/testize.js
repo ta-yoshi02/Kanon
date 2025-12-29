@@ -22,7 +22,6 @@ __$__.Testize = {
     testNodeCounter: 0,
     enable: false,
     storedTest: {},
-    storedtext: [],
     storedActualGraph: {},
     window: {},
     network: {
@@ -526,182 +525,6 @@ __$__.Testize = {
     },
 
 
-    toPlainVisGraph(visData) {
-        if (!visData || !visData.nodes || !visData.edges) {
-            return { nodes: [], edges: [] };
-        }
-
-        const toArray = dataSet =>
-            Object.values(dataSet._data || {}).map(item => jQuery.extend(true, {}, item));
-
-        return {
-            nodes: toArray(visData.nodes),
-            edges: toArray(visData.edges)
-        };
-    },
-
-
-    synthesize() {
-        // メソッド呼び出しごとに操作をまとめる
-        const methodCalls = [];
-        let visGraphPayload = null;
-
-        for (const callLabel in __$__.Testize.storedTest) {
-            for (const contextID in __$__.Testize.storedTest[callLabel]) {
-                if (contextID === 'markerInfo') continue;
-
-                const test = __$__.Testize.storedTest[callLabel][contextID];
-                if (!test.operations || !Array.isArray(test.operations)) continue;
-                
-                // receiverを特定（main-new1など）
-                let receiverObject = "main-new1"; // デフォルト値
-                // 操作から自動検出する場合
-                for (const op of test.operations) {
-                    if (op.from && op.from.startsWith("main-new")) {
-                        receiverObject = op.from;
-                        break;
-                    }
-                }
-                
-                // メソッド名を取得（appendなど）
-                const methodName = callLabel.split('.').pop() || "unknown";
-
-                // Kanon の期待グラフ（vis.js DataSet）を plain object に変換
-                if (!visGraphPayload && test.testData) {
-                    visGraphPayload = __$__.Testize.toPlainVisGraph(test.testData);
-                }
-
-                // 実行時グラフ（存在する場合）を clone
-                let actualGraphPayload;
-                if (__$__.Testize.storedActualGraph[callLabel] && __$__.Testize.storedActualGraph[callLabel][contextID]) {
-                    actualGraphPayload = jQuery.extend(true, {}, __$__.Testize.storedActualGraph[callLabel][contextID]);
-                }
-
-                // 1つのメソッド呼び出しとして追加
-                const methodCallEntry = {
-                    callLabel: callLabel,
-                    contextSensitiveID: contextID,
-                    receiverObject: receiverObject,
-                    methodName: methodName,
-                    operations: test.operations
-                };
-
-                if (actualGraphPayload) {
-                    methodCallEntry.actualGraph = actualGraphPayload;
-                }
-
-                methodCalls.push(methodCallEntry);
-            }
-        }
-
-        // vis_graph が未設定の場合は、現在のテストグラフを直接取得
-        if (!visGraphPayload && __$__.Testize.network && __$__.Testize.network.network) {
-            const networkData = __$__.Testize.network.network.body && __$__.Testize.network.network.body.data;
-            if (networkData && networkData.nodes && networkData.edges) {
-                visGraphPayload = __$__.Testize.toPlainVisGraph({
-                    nodes: networkData.nodes,
-                    edges: networkData.edges
-                });
-            }
-        }
-
-        if (!visGraphPayload) {
-            visGraphPayload = { nodes: [], edges: [] };
-        }
-
-        // サーバーへ送信
-        fetch("http://localhost:3030/synthesize", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ method_calls: methodCalls, vis_graph: visGraphPayload })
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data && data.code) {
-                console.log("合成結果:", data.code);
-
-                // メソッド呼び出しごとのコードも表示
-                if (data.individual_codes && data.individual_codes.length) {
-                    console.log("個別メソッド呼び出しのコード:");
-                    data.individual_codes.forEach((code, index) => {
-                        const methodCall = methodCalls[index];
-                        if (methodCall) {
-                            console.log(`--- ${methodCall.callLabel} (${methodCall.contextSensitiveID}) ---`);
-                        } else {
-                            console.log(`--- Result ${index + 1} ---`);
-                        }
-                        console.log(code);
-                    });
-                }
-
-                // 結果をエディタに挿入
-                let resultText = "";
-                const escherNames = Array.isArray(data.escher_results)
-                    ? data.escher_results.map(r => r && r.name)
-                    : [];
-
-                const appendSnippet = (label, code) => {
-                    if (!code) return;
-                    const header = label ? `// ${label}\n` : "";
-                    resultText += `${header}${code}\n\n`;
-                };
-
-                if (data.individual_codes && data.individual_codes.length) {
-                    if (data.individual_codes.length === methodCalls.length) {
-                        methodCalls.forEach((call, idx) => {
-                            appendSnippet(call.callLabel, data.individual_codes[idx]);
-                        });
-                    } else {
-                        data.individual_codes.forEach((code, idx) => {
-                            const label =
-                                escherNames[idx] ||
-                                (methodCalls[idx] && methodCalls[idx].callLabel) ||
-                                `Result ${idx + 1}`;
-                            appendSnippet(label, code);
-                        });
-                    }
-                } else if (Array.isArray(data.code) && data.code.length) {
-                    data.code.forEach((code, idx) => {
-                        const label =
-                            escherNames[idx] ||
-                            (methodCalls[idx] && methodCalls[idx].callLabel) ||
-                            `Result ${idx + 1}`;
-                        appendSnippet(label, code);
-                    });
-                }
-
-                // 共通パターンとホール情報も表示
-                if (data.common_pattern) {
-                    resultText += "// 共通パターン (ホール表現):\n" + data.common_pattern + "\n\n";
-                }
-
-                if (data.hole_information) {
-                    resultText += "// ホール情報:\n";
-                    for (const [holeKey, values] of Object.entries(data.hole_information)) {
-                        resultText += `// ${holeKey}: ${JSON.stringify(values)}\n`;
-                    }
-                }
-
-                if (resultText.length > 0) {
-                    __$__.editor.session.insert(__$__.editor.getCursorPosition(), resultText);
-                } else {
-                    console.warn("合成結果は取得したが、挿入可能なコードがありませんでした。");
-                }
-            } else {
-                console.warn("合成結果なし");
-            }
-        })
-        .catch(err => {
-            console.error("合成中にエラー:", err);
-        });
-    },
-
-
     /**
      * @param {string} editType
      * @param {Object} data
@@ -731,13 +554,6 @@ __$__.Testize = {
                     type: data.type
                 };
                 __$__.Testize.focusedTestOperations.push(ope);
-                if(ope.isLiteral){
-                    console.log('var ' + ope.id + ' = ' + ope.label + ';');
-                    __$__.Testize.storedtext.push('var ' + ope.id + ' = ' + ope.label + ';');
-                }else{
-                    console.log('var ' + ope.id + ' = new ' + ope.label + '();');
-                    __$__.Testize.storedtext.push('var ' + ope.id + ' = new ' + ope.label + '();');
-                }
                 break;
             }
             case 'editNode': {
@@ -767,8 +583,6 @@ __$__.Testize = {
                     label: data.label
                 };
                 __$__.Testize.focusedTestOperations.push(ope);
-                console.log(ope.from + '.' + ope.label + ' = ' + ope.to + ';');
-                __$__.Testize.storedtext.push(ope.from + '.' + ope.label + ' = ' + ope.to + ';');
                 break;
             }
             case 'editEdgeReference': {
@@ -781,8 +595,6 @@ __$__.Testize = {
                     label: data.label
                 };
                 __$__.Testize.focusedTestOperations.push(ope);
-                console.log(ope.from + '.' + ope.label + ' = ' + ope.newTo + ';');
-                __$__.Testize.storedtext.push(ope.from + '.' + ope.label + ' = ' + ope.newTo + ';');
                 break;
             }
             case 'editEdgeLabel': {
@@ -845,8 +657,7 @@ __$__.Testize = {
                 break;
             }
         }
-        console.log(...__$__.Testize.focusedTestOperations);
-        console.log(__$__.Testize.storedtext);
+        // console.log(...__$__.Testize.focusedTestOperations);
     },
 
 
