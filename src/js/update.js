@@ -103,16 +103,10 @@ __$__.Update = {
                 return;
             }
 
-
             __$__.ObjectGraphNetwork.options.nodes.hidden = true;
             __$__.ObjectGraphNetwork.options.edges.hidden = true;
             __$__.StorePositions.setPositions(graph, true);
             let visGraph = graph.generateVisjsGraph(false);
-
-            if (__$__.ProgramSynth && typeof __$__.ProgramSynth.mergeEditsIntoGlobalGraph === 'function') {
-                console.log('[Update] Calling mergeEditsIntoGlobalGraph');
-                __$__.ProgramSynth.mergeEditsIntoGlobalGraph(visGraph);
-            }
 
             __$__.ObjectGraphNetwork.network.setOptions(__$__.ObjectGraphNetwork.options);
             __$__.ObjectGraphNetwork.network.setData({

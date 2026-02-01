@@ -484,6 +484,26 @@ __$__.ASTTransforms = {
                                             )],
                                         'var'
                                     ),
+                                    b.ExpressionStatement(
+                                        b.CallExpression(
+                                            b.MemberExpression(
+                                                b.MemberExpression(
+                                                    b.Identifier('__$__'),
+                                                    b.Identifier('Context')
+                                                ),
+                                                b.Identifier('PushCallRelationship')
+                                            ),
+                                            [
+                                                b.Literal(label),
+                                                b.Identifier('__context_sensitiveID'),
+                                                b.MemberExpression(
+                                                    b.Identifier('__call_count'),
+                                                    b.Literal(label),
+                                                    true
+                                                )
+                                            ]
+                                        )
+                                    ),
                                     /**
                                      *
                                      * try {
@@ -941,7 +961,12 @@ __$__.ASTTransforms = {
                                                             ),
                                                             [
                                                                 b.Literal(label),
-                                                                b.Identifier('__context_sensitiveID')
+                                                                b.Identifier('__context_sensitiveID'),
+                                                                b.MemberExpression(
+                                                                    b.Identifier('__call_count'),
+                                                                    b.Literal(label),
+                                                                    true
+                                                                )
                                                             ]
                                                         ),
                                                         b.BlockStatement([
@@ -1052,7 +1077,12 @@ __$__.ASTTransforms = {
                                                                             b.Literal(label),
                                                                             b.Identifier('__context_sensitiveID'),
                                                                             b.Identifier('__errorOccurred'),
-                                                                            b.Identifier('__psClassesObject')
+                                                                            b.Identifier('__psClassesObject'),
+                                                                            b.MemberExpression(
+                                                                                b.Identifier('__call_count'),
+                                                                                b.Literal(label),
+                                                                                true
+                                                                            )
                                                                         ]
                                                                     ),
                                                                 )], 'let'

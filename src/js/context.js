@@ -7,6 +7,9 @@ __$__.Context = {
     CheckPointAroundCursor: {},
     CheckPointIDAroundFuncCall: {},
     CallRelationship: {},
+    CallRelationshipLast: {},
+    CallRelationshipByCallCount: {},
+    CallRelationshipStack: [],
     CallTreeNodesOfEachLoop: {},
     InfLoop: '',
     LabelPos: {
@@ -33,6 +36,9 @@ __$__.Context = {
         __$__.Context.CheckPointTable = {};
         __$__.Context.CheckPointIDAroundFuncCall = {};
         __$__.Context.CallRelationship = {};
+        __$__.Context.CallRelationshipLast = {};
+        __$__.Context.CallRelationshipByCallCount = {};
+        __$__.Context.CallRelationshipStack = [];
         __$__.Context.CallTreeNodesOfEachLoop = {main: [__$__.CallTree.rootNode]};
         __$__.Context.LastInfo = {};
         __$__.Context.StoredGraph = {};
@@ -497,7 +503,39 @@ __$__.Context = {
             if (!__$__.Context.CallRelationship[sourceCSID])
                 __$__.Context.CallRelationship[sourceCSID] = {};
             __$__.Context.CallRelationship[sourceCSID][targetCSID] = callLabel;
+            if (!__$__.Context.CallRelationshipLast[sourceCSID])
+                __$__.Context.CallRelationshipLast[sourceCSID] = {};
+            __$__.Context.CallRelationshipLast[sourceCSID][callLabel] = targetCSID;
+            if (!__$__.Context.CallRelationshipByCallCount[sourceCSID])
+                __$__.Context.CallRelationshipByCallCount[sourceCSID] = {};
+            if (!__$__.Context.CallRelationshipByCallCount[sourceCSID][callLabel])
+                __$__.Context.CallRelationshipByCallCount[sourceCSID][callLabel] = {};
+            let callInfo = __$__.Context.CallRelationshipStack.pop();
+            if (callInfo && (callInfo.callLabel !== callLabel || callInfo.sourceCSID !== sourceCSID)) {
+                let stack = __$__.Context.CallRelationshipStack;
+                let idx = -1;
+                for (let i = stack.length - 1; i >= 0; i--) {
+                    if (stack[i].callLabel === callLabel && stack[i].sourceCSID === sourceCSID) {
+                        idx = i;
+                        break;
+                    }
+                }
+                if (idx >= 0)
+                    callInfo = stack.splice(idx, 1)[0];
+            }
+            if (callInfo && callInfo.callCount !== undefined) {
+                __$__.Context.CallRelationshipByCallCount[sourceCSID][callLabel][callInfo.callCount] = targetCSID;
+            }
         }
+    },
+
+    PushCallRelationship(callLabel, sourceCSID, callCount) {
+        if (!callLabel || !sourceCSID) return;
+        __$__.Context.CallRelationshipStack.push({
+            callLabel: callLabel,
+            sourceCSID: sourceCSID,
+            callCount: callCount
+        });
     },
     // to add information to newly created objects.  For "new C(e...)"
     // in the source program, the code instrumetor generates
