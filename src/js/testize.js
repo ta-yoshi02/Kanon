@@ -785,6 +785,39 @@ __$__.Testize = {
         };
     },
 
+    dispatchSynthesisRequest(payload) {
+        const browserRunner = __$__.Testize.runRefsynBrowser
+            || (typeof globalThis !== 'undefined' ? globalThis.runRefsynBrowser : undefined);
+        if (typeof browserRunner === 'function') {
+            return Promise.resolve(browserRunner(payload));
+        }
+
+        const location = typeof globalThis !== 'undefined' ? globalThis.location : undefined;
+        const hostname = location && typeof location.hostname === 'string'
+            ? location.hostname
+            : '';
+        const isLocalBackendFallbackHost = hostname === 'localhost'
+            || hostname === '127.0.0.1'
+            || hostname === '[::1]';
+        if (!isLocalBackendFallbackHost) {
+            return Promise.reject(new Error(
+                'RefSyn browser runtime is not loaded. Production builds must bundle src/js/vendor/refsyn-browser-runtime.js.',
+            ));
+        }
+
+        return fetch("http://localhost:3030/synthesize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        })
+        .then((response) => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        });
+    },
+
     isRuntimeScopedId(id) {
         return typeof id === 'string' && id.includes('-call');
     },
@@ -1086,17 +1119,10 @@ __$__.Testize = {
             visGraphPayload = { nodes: [], edges: [] };
         }
 
-        // サーバーへ送信
-        fetch("http://localhost:3030/synthesize", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ method_calls: methodCalls, vis_graph: visGraphPayload })
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
+        // transport は差し替え可能に保ち、payload 形は固定する
+        __$__.Testize.dispatchSynthesisRequest({
+            method_calls: methodCalls,
+            vis_graph: visGraphPayload
         })
         .then(data => {
             if (!data) {
