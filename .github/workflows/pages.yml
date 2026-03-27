@@ -50,6 +50,14 @@ jobs:
       - name: Install Kanon dependencies
         run: npm install
 
+      - name: Install escher-ts dependencies
+        run: npm install
+        working-directory: refsyn/external/escher-ts
+
+      - name: Build escher-ts distribution
+        run: npm run build
+        working-directory: refsyn/external/escher-ts
+
       - name: Build RefSyn wasm package
         run: node web/scripts/build-wasm.mjs
         working-directory: refsyn
