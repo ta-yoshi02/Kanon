@@ -5,3 +5,5 @@ package-lock.json
 */obj/Debug
 **/Debug
 *~
+build/
+dist/

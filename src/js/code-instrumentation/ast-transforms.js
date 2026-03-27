@@ -484,6 +484,22 @@ __$__.ASTTransforms = {
                                             )],
                                         'var'
                                     ),
+                                    b.ExpressionStatement(
+                                        b.CallExpression(
+                                            b.MemberExpression(
+                                                b.MemberExpression(
+                                                    b.Identifier('__$__'),
+                                                    b.Identifier('Testize')
+                                                ),
+                                                b.Identifier('storeCallArguments')
+                                            ),
+                                            [
+                                                b.Literal(label),
+                                                b.Identifier('__context_sensitiveID'),
+                                                b.Identifier('args')
+                                            ]
+                                        )
+                                    ),
                                     /**
                                      *
                                      * try {

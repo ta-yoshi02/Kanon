@@ -1,5 +1,6 @@
 __$__.Testize = {
     callParenthesisPos: {},
+    callMethodNameByLabel: {},
     hoveringCallInfo: {
         label: undefined,
         div: undefined
@@ -22,6 +23,7 @@ __$__.Testize = {
     testNodeCounter: 0,
     enable: false,
     storedTest: {},
+    storedCallArguments: {},
     storedtext: [],
     storedActualGraph: {},
     window: {},
@@ -201,6 +203,238 @@ __$__.Testize = {
 
     initialize() {
         __$__.Testize.callParenthesisPos = {};
+        __$__.Testize.callMethodNameByLabel = {};
+        __$__.Testize.storedCallArguments = {};
+    },
+
+
+    normalizeMethodName(name) {
+        if (typeof name !== 'string') return 'unknown';
+        const trimmed = name.trim();
+        return trimmed.length > 0 ? trimmed : 'unknown';
+    },
+
+
+    sanitizeClassNameHint(name) {
+        if (typeof name !== 'string') return undefined;
+        const trimmed = name.trim();
+        if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(trimmed)) return undefined;
+        return trimmed;
+    },
+
+
+    extractMethodNameFromCallNode(node) {
+        if (!node || !node.callee) return undefined;
+        const callee = node.callee;
+
+        if (callee.type === 'Identifier') {
+            return callee.name;
+        }
+
+        if (callee.type === 'MemberExpression') {
+            const prop = callee.property;
+            if (!callee.computed && prop && prop.type === 'Identifier') {
+                return prop.name;
+            }
+            if (prop && prop.type === 'Literal') {
+                return String(prop.value);
+            }
+            if (prop && prop.type === 'Identifier') {
+                return prop.name;
+            }
+        }
+
+        return undefined;
+    },
+
+
+    findNodeLabelById(graph, nodeId) {
+        if (!graph || !Array.isArray(graph.nodes) || !nodeId) return undefined;
+        const node = graph.nodes.find((n) => n && n.id === nodeId);
+        if (!node || typeof node.label !== 'string') return undefined;
+        if (node.isLiteral === true) return undefined;
+        return node.label;
+    },
+
+
+    resolveReceiverClassName(receiverObject, actualGraph, visGraph) {
+        const labelFromActual = __$__.Testize.findNodeLabelById(actualGraph, receiverObject);
+        const labelFromVis = __$__.Testize.findNodeLabelById(visGraph, receiverObject);
+        return __$__.Testize.sanitizeClassNameHint(labelFromActual || labelFromVis);
+    },
+
+
+    extractParamNameFromPattern(pattern, fallbackName) {
+        if (!pattern || typeof pattern !== 'object') return fallbackName;
+        if (pattern.type === 'Identifier' && pattern.name) return pattern.name;
+        if (pattern.type === 'AssignmentPattern') {
+            return __$__.Testize.extractParamNameFromPattern(pattern.left, fallbackName);
+        }
+        if (pattern.type === 'RestElement') {
+            return __$__.Testize.extractParamNameFromPattern(pattern.argument, fallbackName);
+        }
+        return fallbackName;
+    },
+
+
+    parseEditorAst() {
+        const parser = (typeof esprima !== 'undefined' && esprima)
+            ? esprima
+            : ((typeof window !== 'undefined' && window.esprima) ? window.esprima : undefined);
+        if (!parser) {
+            throw new Error('esprima is unavailable');
+        }
+
+        const source = __$__.editor.getValue();
+        const optionsList = [
+            { loc: true, range: true, tolerant: true },
+            { loc: true, range: true }
+        ];
+        const parseFns = [];
+        if (typeof parser.parseScript === 'function') parseFns.push(parser.parseScript.bind(parser));
+        if (typeof parser.parse === 'function') parseFns.push(parser.parse.bind(parser));
+        if (typeof parser.parseModule === 'function') parseFns.push(parser.parseModule.bind(parser));
+        if (parseFns.length === 0) {
+            throw new Error('no usable parse function on esprima');
+        }
+
+        const errors = [];
+        for (const fn of parseFns) {
+            for (const options of optionsList) {
+                try {
+                    return fn(source, options);
+                } catch (e) {
+                    errors.push(e && e.message ? e.message : String(e));
+                }
+            }
+        }
+        throw new Error(errors.join(' | '));
+    },
+
+
+    findMethodDefinitionInfo(methodName, arityHint, classNameHint) {
+        if (!methodName) return null;
+        const normalizedClassHint = __$__.Testize.sanitizeClassNameHint(classNameHint);
+        let ast;
+        try {
+            ast = __$__.Testize.parseEditorAst();
+        } catch (e) {
+            console.warn(`[Testize] failed while locating method '${methodName}':`, e && e.message ? e.message : e);
+            return null;
+        }
+
+        let best = null;
+        const updateBest = (name, params, loc, range, ownerClassName) => {
+            if (name !== methodName || !loc || !range) return;
+            const paramNames = (params || []).map((param, idx) =>
+                __$__.Testize.extractParamNameFromPattern(param, `arg${idx}`));
+            const arity = paramNames.length;
+            let score = (typeof arityHint === 'number')
+                ? (arity === arityHint ? 0 : 100 + Math.abs(arity - arityHint))
+                : 0;
+            if (normalizedClassHint) {
+                if (ownerClassName === normalizedClassHint) {
+                    score -= 1000;
+                } else if (ownerClassName) {
+                    score += 1000;
+                } else {
+                    score += 2000;
+                }
+            }
+            const candidate = { paramNames, loc, range, score, ownerClassName };
+            if (!best || candidate.score < best.score || (candidate.score === best.score && candidate.range[0] < best.range[0])) {
+                best = candidate;
+            }
+        };
+
+        const visit = (node, currentClassName) => {
+            if (!node || typeof node !== 'object') return;
+            let nextClassName = currentClassName;
+
+            if (node.type === 'ClassDeclaration' && node.id && node.id.type === 'Identifier') {
+                nextClassName = node.id.name;
+            } else if (node.type === 'ClassExpression' && node.id && node.id.type === 'Identifier') {
+                nextClassName = node.id.name;
+            }
+
+            if (node.type === 'MethodDefinition') {
+                const key = node.key;
+                const name = key && key.type === 'Identifier'
+                    ? key.name
+                    : (key && key.type === 'Literal' ? String(key.value) : undefined);
+                if (node.value && node.value.type === 'FunctionExpression') {
+                    updateBest(name, node.value.params, node.loc, node.range, nextClassName);
+                }
+            } else if (node.type === 'FunctionDeclaration' && node.id && node.id.name) {
+                updateBest(node.id.name, node.params, node.loc, node.range, undefined);
+            }
+
+            for (const key in node) {
+                if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
+                const child = node[key];
+                if (!child) continue;
+                if (Array.isArray(child)) {
+                    child.forEach((entry) => visit(entry, nextClassName));
+                } else if (typeof child === 'object' && child.type) {
+                    visit(child, nextClassName);
+                }
+            }
+        };
+        visit(ast, undefined);
+        return best;
+    },
+
+
+    replaceMethodDefinitionSource(methodName, arityHint, replacementSource, classNameHint) {
+        const info = __$__.Testize.findMethodDefinitionInfo(methodName, arityHint, classNameHint);
+        if (!info || !info.loc || !replacementSource) return false;
+
+        const start = info.loc.start;
+        const end = info.loc.end;
+        const baseIndent = ' '.repeat(start.column);
+        const adjustedSource = replacementSource
+            .split('\n')
+            .map((line, idx) => idx === 0 ? line : baseIndent + line)
+            .join('\n');
+
+        const range = new __$__.Range(
+            start.line - 1,
+            start.column,
+            end.line - 1,
+            end.column
+        );
+        __$__.editor.session.replace(range, adjustedSource);
+        return true;
+    },
+
+
+    extractMethodNameFromMethodSource(methodSource) {
+        if (typeof methodSource !== 'string') return undefined;
+        const match = methodSource.match(/^\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/);
+        return match ? match[1] : undefined;
+    },
+
+
+    extractMethodArityFromMethodSource(methodSource) {
+        if (typeof methodSource !== 'string') return undefined;
+        const match = methodSource.match(/^\s*(?:function\s+)?[A-Za-z_$][A-Za-z0-9_$]*\s*\(([^)]*)\)/);
+        if (!match) return undefined;
+        const paramsText = match[1].trim();
+        if (paramsText.length === 0) return 0;
+        return paramsText
+            .split(',')
+            .map((param) => param.trim())
+            .filter((param) => param.length > 0)
+            .length;
+    },
+
+
+    toLineComments(text) {
+        if (typeof text !== 'string' || text.length === 0) return '';
+        return text
+            .split('\n')
+            .map((line) => `// ${line}`)
+            .join('\n');
     },
 
     redraw() {
@@ -531,12 +765,187 @@ __$__.Testize = {
             return { nodes: [], edges: [] };
         }
 
-        const toArray = dataSet =>
-            Object.values(dataSet._data || {}).map(item => jQuery.extend(true, {}, item));
+        const toArray = (dataSet) => {
+            if (!dataSet) return [];
+            if (Array.isArray(dataSet)) {
+                return dataSet.map((item) => jQuery.extend(true, {}, item));
+            }
+            if (dataSet._data) {
+                return Object.values(dataSet._data).map((item) => jQuery.extend(true, {}, item));
+            }
+            if (typeof dataSet.get === 'function') {
+                return dataSet.get().map((item) => jQuery.extend(true, {}, item));
+            }
+            return [];
+        };
 
         return {
             nodes: toArray(visData.nodes),
             edges: toArray(visData.edges)
+        };
+    },
+
+    dispatchSynthesisRequest(payload) {
+        const browserRunner = __$__.Testize.runRefsynBrowser
+            || (typeof globalThis !== 'undefined' ? globalThis.runRefsynBrowser : undefined);
+        if (typeof browserRunner === 'function') {
+            return Promise.resolve(browserRunner(payload));
+        }
+
+        const location = typeof globalThis !== 'undefined' ? globalThis.location : undefined;
+        const hostname = location && typeof location.hostname === 'string'
+            ? location.hostname
+            : '';
+        const isLocalBackendFallbackHost = hostname === 'localhost'
+            || hostname === '127.0.0.1'
+            || hostname === '[::1]';
+        if (!isLocalBackendFallbackHost) {
+            return Promise.reject(new Error(
+                'RefSyn browser runtime is not loaded. Production builds must bundle src/js/vendor/refsyn-browser-runtime.js.',
+            ));
+        }
+
+        return fetch("http://localhost:3030/synthesize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        })
+        .then((response) => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        });
+    },
+
+    isRuntimeScopedId(id) {
+        return typeof id === 'string' && id.includes('-call');
+    },
+
+    normalizeIdWithRuntimeMap(id, runtimeToTempMap, runtimeAliasMap = undefined) {
+        if (typeof id !== 'string') return id;
+        let resolvedId = id;
+        if (runtimeAliasMap && typeof runtimeAliasMap === 'object') {
+            const visited = {};
+            while (typeof runtimeAliasMap[resolvedId] === 'string' && !visited[resolvedId]) {
+                visited[resolvedId] = true;
+                resolvedId = runtimeAliasMap[resolvedId];
+            }
+        }
+        if (!runtimeToTempMap || typeof runtimeToTempMap !== 'object') return resolvedId;
+        // Only runtime-scoped IDs are unstable enough to rewrite into temp IDs.
+        // Stable graph IDs such as main-new2 must survive normalization unchanged.
+        if (!__$__.Testize.isRuntimeScopedId(resolvedId)) return resolvedId;
+        return runtimeToTempMap[resolvedId] || resolvedId;
+    },
+
+    mergeRuntimeIdMapping(runtimeToTempMap, idMapping) {
+        if (!runtimeToTempMap || !idMapping || typeof idMapping !== 'object') return;
+        Object.keys(idMapping).forEach((tempId) => {
+            const runtimeId = idMapping[tempId];
+            if (typeof tempId !== 'string' || typeof runtimeId !== 'string') return;
+            if (!runtimeId.length || !tempId.length) return;
+            if (!__$__.Testize.isRuntimeScopedId(runtimeId)) return;
+            if (!(runtimeId in runtimeToTempMap)) {
+                runtimeToTempMap[runtimeId] = tempId;
+            }
+        });
+    },
+
+    mergeRuntimeAliasMapping(runtimeAliasMap, aliasMapping) {
+        if (!runtimeAliasMap || !aliasMapping || typeof aliasMapping !== 'object') return;
+        Object.keys(aliasMapping).forEach((fromId) => {
+            const toId = aliasMapping[fromId];
+            if (typeof fromId !== 'string' || typeof toId !== 'string') return;
+            if (!fromId.length || !toId.length) return;
+            if (!(fromId in runtimeAliasMap)) {
+                runtimeAliasMap[fromId] = toId;
+            }
+        });
+    },
+
+    sanitizeIdMapping(idMapping) {
+        if (!idMapping || typeof idMapping !== 'object') return null;
+        const filtered = {};
+        Object.keys(idMapping).forEach((tempId) => {
+            const runtimeId = idMapping[tempId];
+            if (typeof tempId !== 'string' || typeof runtimeId !== 'string') return;
+            if (!tempId.startsWith('__temp')) return;
+            if (!__$__.Testize.isRuntimeScopedId(runtimeId)) return;
+            filtered[tempId] = runtimeId;
+        });
+        return Object.keys(filtered).length > 0 ? filtered : null;
+    },
+
+    normalizeOperationsWithRuntimeMap(operations, runtimeToTempMap, runtimeAliasMap = undefined) {
+        if (!Array.isArray(operations)) return [];
+        const idKeys = ['id', 'from', 'to', 'oldTo', 'newTo', 'old_to', 'new_to'];
+        return operations.map((op) => {
+            const next = jQuery.extend(true, {}, op);
+            if (!next || typeof next !== 'object') return next;
+            idKeys.forEach((key) => {
+                if (!(key in next)) return;
+                if (typeof next[key] !== 'string') return;
+                next[key] = __$__.Testize.normalizeIdWithRuntimeMap(
+                    next[key],
+                    runtimeToTempMap,
+                    runtimeAliasMap
+                );
+            });
+            return next;
+        });
+    },
+
+    normalizeCallArgument(value) {
+        if (typeof value === 'number' && Number.isInteger(value)) {
+            return { ok: true, value: value, type: 'Int' };
+        }
+        if (value === null) {
+            return { ok: true, value: null, type: 'Ptr' };
+        }
+        if (value && typeof value === 'object' && value.__id) {
+            return { ok: true, value: value.__id, type: 'Ptr' };
+        }
+        return { ok: false };
+    },
+
+    storeCallArguments(callLabel, context_sensitiveID, args) {
+        if (!callLabel || !context_sensitiveID || !Array.isArray(args)) {
+            return;
+        }
+        if (!__$__.Testize.storedCallArguments[callLabel]) {
+            __$__.Testize.storedCallArguments[callLabel] = {};
+        }
+
+        const encodedValues = [];
+        const encodedTypes = [];
+        const encodedNames = [];
+        let unsupported = false;
+
+        args.forEach((arg, idx) => {
+            const encoded = __$__.Testize.normalizeCallArgument(arg);
+            if (!encoded.ok) {
+                unsupported = true;
+                return;
+            }
+            encodedValues.push(encoded.value);
+            encodedTypes.push(encoded.type);
+            encodedNames.push(`arg${idx}`);
+        });
+
+        if (unsupported) {
+            __$__.Testize.storedCallArguments[callLabel][context_sensitiveID] = {
+                arguments: [],
+                argumentTypes: [],
+                argumentNames: []
+            };
+            return;
+        }
+
+        __$__.Testize.storedCallArguments[callLabel][context_sensitiveID] = {
+            arguments: encodedValues,
+            argumentTypes: encodedTypes,
+            argumentNames: encodedNames
         };
     },
 
@@ -545,6 +954,8 @@ __$__.Testize = {
         // メソッド呼び出しごとに操作をまとめる
         const methodCalls = [];
         let visGraphPayload = null;
+        const runtimeToTempMap = {};
+        const runtimeAliasMap = {};
 
         for (const callLabel in __$__.Testize.storedTest) {
             for (const contextID in __$__.Testize.storedTest[callLabel]) {
@@ -564,30 +975,129 @@ __$__.Testize = {
                 }
                 
                 // メソッド名を取得（appendなど）
-                const methodName = callLabel.split('.').pop() || "unknown";
+                const methodNameFromPos = (__$__.Testize.callParenthesisPos[callLabel]
+                    && __$__.Testize.callParenthesisPos[callLabel].methodName)
+                    || __$__.Testize.callMethodNameByLabel[callLabel];
+                const methodName = __$__.Testize.normalizeMethodName(
+                    test.methodName || methodNameFromPos || callLabel.split('.').pop() || "unknown"
+                );
 
                 // Kanon の期待グラフ（vis.js DataSet）を plain object に変換
                 if (!visGraphPayload && test.testData) {
                     visGraphPayload = __$__.Testize.toPlainVisGraph(test.testData);
                 }
 
-                // 実行時グラフ（存在する場合）を clone
-                let actualGraphPayload;
-                if (__$__.Testize.storedActualGraph[callLabel] && __$__.Testize.storedActualGraph[callLabel][contextID]) {
-                    actualGraphPayload = jQuery.extend(true, {}, __$__.Testize.storedActualGraph[callLabel][contextID]);
-                }
-
                 // 1つのメソッド呼び出しとして追加
+                const runtimeCallArgs = __$__.Testize.storedCallArguments[callLabel]
+                    && __$__.Testize.storedCallArguments[callLabel][contextID];
+                const serializedArgs = Array.isArray(test.arguments) && test.arguments.length > 0
+                    ? test.arguments
+                    : (runtimeCallArgs && Array.isArray(runtimeCallArgs.arguments) ? runtimeCallArgs.arguments : []);
+                const serializedArgTypes = Array.isArray(test.argumentTypes) && test.argumentTypes.length > 0
+                    ? test.argumentTypes
+                    : (runtimeCallArgs && Array.isArray(runtimeCallArgs.argumentTypes) ? runtimeCallArgs.argumentTypes : []);
+                const serializedArgNames = Array.isArray(test.argumentNames) && test.argumentNames.length > 0
+                    ? test.argumentNames
+                    : (runtimeCallArgs && Array.isArray(runtimeCallArgs.argumentNames) ? runtimeCallArgs.argumentNames : []);
+                const actualGraphSource = __$__.Testize.storedActualGraph[callLabel]
+                    && __$__.Testize.storedActualGraph[callLabel][contextID];
+                const actualGraphPayload = actualGraphSource
+                    ? __$__.Testize.toPlainVisGraph(actualGraphSource)
+                    : null;
+                const precondGraphPayload = test.precond
+                    ? __$__.Testize.toPlainVisGraph(test.precond)
+                    : null;
+                const expectedGraphPayload = test.testData
+                    ? __$__.Testize.toPlainVisGraph(test.testData)
+                    : null;
+                const runtimeAlias = (actualGraphPayload && precondGraphPayload)
+                    ? __$__.Testize.buildRuntimeAliasMapping(actualGraphPayload, precondGraphPayload)
+                    : null;
+                if (runtimeAlias && Object.keys(runtimeAlias).length > 0) {
+                    __$__.Testize.mergeRuntimeAliasMapping(runtimeAliasMap, runtimeAlias);
+                }
+                let idMapping = null;
+                if (actualGraphPayload) {
+                    const mappingCandidates = [];
+                    if (precondGraphPayload) {
+                        mappingCandidates.push(
+                            __$__.Testize.buildTempToActualIdMapping(actualGraphPayload, precondGraphPayload)
+                        );
+                    }
+                    if (expectedGraphPayload) {
+                        mappingCandidates.push(
+                            __$__.Testize.buildTempToActualIdMapping(actualGraphPayload, expectedGraphPayload)
+                        );
+                    }
+                    let bestScore = -1;
+                    mappingCandidates.forEach((candidate) => {
+                        if (!candidate) return;
+                        const score = Object.keys(candidate).filter((key) => key.slice(0, 6) === '__temp').length;
+                        if (score > bestScore) {
+                            bestScore = score;
+                            idMapping = candidate;
+                        }
+                    });
+                }
+                idMapping = __$__.Testize.sanitizeIdMapping(idMapping);
+                if (idMapping && Object.keys(idMapping).length > 0) {
+                    __$__.Testize.mergeRuntimeIdMapping(runtimeToTempMap, idMapping);
+                }
+                const normalizedReceiverObject = __$__.Testize.normalizeIdWithRuntimeMap(
+                    receiverObject,
+                    runtimeToTempMap,
+                    runtimeAliasMap
+                );
+                const normalizedOperations = __$__.Testize.normalizeOperationsWithRuntimeMap(
+                    test.operations,
+                    runtimeToTempMap,
+                    runtimeAliasMap
+                );
+                const receiverClassName = __$__.Testize.resolveReceiverClassName(
+                    normalizedReceiverObject,
+                    actualGraphPayload,
+                    visGraphPayload
+                );
+                const methodInfo = __$__.Testize.findMethodDefinitionInfo(
+                    methodName,
+                    serializedArgs.length,
+                    receiverClassName
+                );
+                const methodParamNames = methodInfo
+                    ? methodInfo.paramNames
+                    : [];
+
                 const methodCallEntry = {
                     callLabel: callLabel,
                     contextSensitiveID: contextID,
-                    receiverObject: receiverObject,
+                    receiverObject: normalizedReceiverObject,
                     methodName: methodName,
-                    operations: test.operations
+                    operations: normalizedOperations,
+                    arguments: serializedArgs
                 };
-
+                if (serializedArgTypes.length > 0) {
+                    methodCallEntry.argumentTypes = serializedArgTypes;
+                }
+                if (serializedArgNames.length > 0) {
+                    methodCallEntry.argumentNames = serializedArgNames;
+                }
+                if (receiverClassName) {
+                    methodCallEntry.receiverClassName = receiverClassName;
+                }
+                if (methodParamNames.length > 0) {
+                    methodCallEntry.methodParamNames = methodParamNames;
+                }
+                if (precondGraphPayload) {
+                    methodCallEntry.precondGraph = precondGraphPayload;
+                }
                 if (actualGraphPayload) {
                     methodCallEntry.actualGraph = actualGraphPayload;
+                    if (idMapping && Object.keys(idMapping).length > 0) {
+                        methodCallEntry.idMapping = idMapping;
+                    } else {
+                        methodCallEntry.idMapping = {};
+                        console.warn(`[Testize] idMapping generation failed for ${callLabel}/${contextID}; empty idMapping is sent`);
+                    }
                 }
 
                 methodCalls.push(methodCallEntry);
@@ -609,57 +1119,127 @@ __$__.Testize = {
             visGraphPayload = { nodes: [], edges: [] };
         }
 
-        // サーバーへ送信
-        fetch("http://localhost:3030/synthesize", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ method_calls: methodCalls, vis_graph: visGraphPayload })
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
+        // transport は差し替え可能に保ち、payload 形は固定する
+        __$__.Testize.dispatchSynthesisRequest({
+            method_calls: methodCalls,
+            vis_graph: visGraphPayload
         })
         .then(data => {
-            if (data && data.code) {
+            if (!data) {
+                console.warn("合成結果なし");
+                return;
+            }
+
+            if (data.code) {
                 console.log("合成結果:", data.code);
-                
-                // メソッド呼び出しごとのコードも表示
-                if (data.individual_codes) {
-                    console.log("個別メソッド呼び出しのコード:");
-                    data.individual_codes.forEach((code, index) => {
-                        const methodCall = methodCalls[index];
-                        console.log(`--- ${methodCall.callLabel} (${methodCall.contextSensitiveID}) ---`);
-                        console.log(code);
+            }
+
+            // メソッド呼び出しごとのコードも表示
+            if (data.individual_codes) {
+                console.log("個別メソッド呼び出しのコード:");
+                data.individual_codes.forEach((code, index) => {
+                    const methodCall = methodCalls[index];
+                    if (!methodCall) return;
+                    console.log(`--- ${methodCall.callLabel} (${methodCall.contextSensitiveID}) ---`);
+                    console.log(code);
+                });
+            }
+
+            let replacedMethod = false;
+            if (typeof data.composed_method_code === 'string' && methodCalls.length > 0) {
+                const primaryCall = methodCalls[0];
+                const arityHint = Array.isArray(primaryCall.methodParamNames)
+                    ? primaryCall.methodParamNames.length
+                    : (Array.isArray(primaryCall.arguments) ? primaryCall.arguments.length : undefined);
+                const classNameHint = typeof primaryCall.receiverClassName === 'string'
+                    ? primaryCall.receiverClassName
+                    : undefined;
+                const auxMethods = Array.isArray(data.code)
+                    ? data.code.filter(code => typeof code === 'string' && code.trim().length > 0)
+                    : [];
+                const seenAuxMethods = new Set();
+                const auxMethodEntries = auxMethods
+                    .map((source) => {
+                        const name = __$__.Testize.extractMethodNameFromMethodSource(source);
+                        const arity = __$__.Testize.extractMethodArityFromMethodSource(source);
+                        return { source, name, arity };
+                    })
+                    .filter((entry) => {
+                        if (!entry.name) return false;
+                        const key = `${entry.name}:${entry.arity}`;
+                        if (seenAuxMethods.has(key)) return false;
+                        seenAuxMethods.add(key);
+                        return true;
+                    });
+                const missingAuxMethods = [];
+                const existingAuxMethods = [];
+                auxMethodEntries.forEach((entry) => {
+                    const existing = __$__.Testize.findMethodDefinitionInfo(entry.name, entry.arity, classNameHint);
+                    if (existing) {
+                        existingAuxMethods.push(entry);
+                    } else {
+                        missingAuxMethods.push(entry.source);
+                    }
+                });
+                const replacementSource = missingAuxMethods
+                    .concat([data.composed_method_code])
+                    .join("\n\n");
+                replacedMethod = __$__.Testize.replaceMethodDefinitionSource(
+                    primaryCall.methodName,
+                    arityHint,
+                    replacementSource,
+                    classNameHint
+                );
+                if (!replacedMethod) {
+                    console.warn(`メソッド定義の置換に失敗: ${primaryCall.methodName}`);
+                } else {
+                    existingAuxMethods.forEach((entry) => {
+                        const replacedAux = __$__.Testize.replaceMethodDefinitionSource(
+                            entry.name,
+                            entry.arity,
+                            entry.source,
+                            classNameHint
+                        );
+                        if (!replacedAux) {
+                            console.warn(`補助メソッド定義の置換に失敗: ${entry.name}`);
+                        }
                     });
                 }
-                
-                // 結果をエディタに挿入
+            }
+
+            if (!replacedMethod) {
+                // 結果をエディタに挿入（フォールバック）
                 let resultText = "";
-                
+
                 // 個別のコードを先に表示
                 if (data.individual_codes) {
-                    methodCalls.forEach((call, idx) => {
-                        resultText += `// ${call.callLabel}\n${data.individual_codes[idx]}\n\n`;
+                    data.individual_codes.forEach((line) => {
+                        if (typeof line === 'string') {
+                            resultText += `// ${line}\n`;
+                        }
                     });
+                    resultText += "\n";
                 }
-                
+
+                if (typeof data.composed_method_code === 'string') {
+                    resultText += "// composed_method_code (preview only; replacement failed)\n";
+                    resultText += __$__.Testize.toLineComments(data.composed_method_code) + "\n\n";
+                }
+
                 // 共通パターンとホール情報も表示
                 if (data.common_pattern) {
-                    resultText += "// 共通パターン (ホール表現):\n" + data.common_pattern + "\n\n";
+                    resultText += "// 共通パターン (ホール表現):\n";
+                    resultText += __$__.Testize.toLineComments(data.common_pattern) + "\n\n";
                 }
-                
+
                 if (data.hole_information) {
                     resultText += "// ホール情報:\n";
                     for (const [holeKey, values] of Object.entries(data.hole_information)) {
                         resultText += `// ${holeKey}: ${JSON.stringify(values)}\n`;
                     }
                 }
-                
+
                 __$__.editor.session.insert(__$__.editor.getCursorPosition(), resultText);
-            } else {
-                console.warn("合成結果なし");
             }
         })
         .catch(err => {
@@ -823,7 +1403,7 @@ __$__.Testize = {
     // ==================================================================================
 
 
-    matching(actualGraph, expectedGraph, returnObjectID = undefined) {
+    matching(actualGraph, expectedGraph, returnObjectID = undefined, idMapping = undefined) {
         let objectDuplication_actual = __$__.Testize.constructObjectForTraverse(actualGraph.nodes, actualGraph.edges, returnObjectID);
 
         let objectDuplication_expected = __$__.Testize.constructObjectForTraverse(expectedGraph.nodes, expectedGraph.edges);
@@ -835,7 +1415,7 @@ __$__.Testize = {
             let obj_expected = objectDuplication_expected[variableName];
 
             if (obj_expected) {
-                let result = __$__.Testize.traverseSimultaneously(obj_actual, obj_expected);
+                let result = __$__.Testize.traverseSimultaneously(obj_actual, obj_expected, idMapping);
 
                 if (!result) return false;
 
@@ -846,6 +1426,137 @@ __$__.Testize = {
             }
 
             return idx !== arr.length - 1 || Object.keys(objectDuplication_expected).length === 0;
+        });
+    },
+
+
+    buildTempToActualIdMapping(actualGraph, expectedGraph, returnObjectID = undefined) {
+        if (!actualGraph || !expectedGraph) return null;
+        const idMapping = {};
+        const matched = __$__.Testize.matchingForIdMapping(actualGraph, expectedGraph, returnObjectID, idMapping);
+        if (!matched && Object.keys(idMapping).length === 0) return null;
+        return idMapping;
+    },
+
+
+    buildRuntimeAliasMapping(actualGraph, expectedGraph, returnObjectID = undefined) {
+        if (!actualGraph || !expectedGraph) return null;
+        const aliasMapping = {};
+        const matched = __$__.Testize.matchingForRuntimeAlias(
+            actualGraph,
+            expectedGraph,
+            returnObjectID,
+            aliasMapping
+        );
+        if (!matched && Object.keys(aliasMapping).length === 0) return null;
+        return aliasMapping;
+    },
+
+
+    matchingForIdMapping(actualGraph, expectedGraph, returnObjectID = undefined, idMapping = undefined) {
+        const objectDuplication_actual = __$__.Testize.constructObjectForTraverse(actualGraph.nodes, actualGraph.edges, returnObjectID);
+        const objectDuplication_expected = __$__.Testize.constructObjectForTraverse(expectedGraph.nodes, expectedGraph.edges);
+        const expectedRoots = Object.keys(objectDuplication_expected);
+        if (expectedRoots.length === 0) return false;
+
+        return expectedRoots.every((variableName) => {
+            const obj_expected = objectDuplication_expected[variableName];
+            const obj_actual = objectDuplication_actual[variableName];
+            if (!obj_expected || !obj_actual) return false;
+            return __$__.Testize.traverseForIdMapping(obj_actual, obj_expected, idMapping);
+        });
+    },
+
+
+    matchingForRuntimeAlias(actualGraph, expectedGraph, returnObjectID = undefined, aliasMapping = undefined) {
+        const objectDuplication_actual = __$__.Testize.constructObjectForTraverse(actualGraph.nodes, actualGraph.edges, returnObjectID);
+        const objectDuplication_expected = __$__.Testize.constructObjectForTraverse(expectedGraph.nodes, expectedGraph.edges);
+        const expectedRoots = Object.keys(objectDuplication_expected);
+        if (expectedRoots.length === 0) return false;
+
+        return expectedRoots.every((variableName) => {
+            const obj_expected = objectDuplication_expected[variableName];
+            const obj_actual = objectDuplication_actual[variableName];
+            if (!obj_expected || !obj_actual) return false;
+            return __$__.Testize.traverseForRuntimeAlias(obj_actual, obj_expected, aliasMapping);
+        });
+    },
+
+
+    traverseForIdMapping(obj_actual, obj_expected, idMapping = undefined) {
+        const info_actual = obj_actual.__info;
+        const info_expected = obj_expected.__info;
+
+        if (info_expected.id.slice(0, 6) === '__temp') {
+            if (idMapping) idMapping[info_expected.id] = info_actual.id;
+            info_expected.id = info_actual.id;
+        } else if (__$__.Testize.isRuntimeScopedId(info_expected.id)) {
+            // Runtime scoped IDs are unstable across re-synthesis; compare by structure instead.
+            info_expected.id = info_actual.id;
+        }
+
+        const sameLiteralKind = (!info_actual.literal === !info_expected.literal);
+        const samePropCount = info_actual.prop.length === info_expected.prop.length;
+        const idCompatible = info_expected.id.slice(0, 6) === '__temp'
+            ? true
+            : info_actual.id === info_expected.id;
+        // ID mapping extraction should be robust against literal representation differences
+        // such as "25" vs 25 in expected/runtime graphs.
+        const labelCompatible = info_actual.literal || info_expected.literal
+            ? true
+            : info_actual.label === info_expected.label;
+        const isMatching = sameLiteralKind && samePropCount && idCompatible && labelCompatible;
+
+        if (!isMatching) return false;
+
+        if (info_actual.checked) return true;
+        info_actual.checked = true;
+        info_expected.checked = true;
+
+        return info_actual.prop.every((prop) => {
+            const nextObj_actual = obj_actual[prop];
+            const nextObj_expected = obj_expected[prop];
+            if (!nextObj_expected) return false;
+            return __$__.Testize.traverseForIdMapping(nextObj_actual, nextObj_expected, idMapping);
+        });
+    },
+
+
+    traverseForRuntimeAlias(obj_actual, obj_expected, aliasMapping = undefined) {
+        const info_actual = obj_actual.__info;
+        const info_expected = obj_expected.__info;
+        const expectedId = info_expected.id;
+        const expectedIsTemp = expectedId.slice(0, 6) === '__temp';
+        const expectedIsRuntime = __$__.Testize.isRuntimeScopedId(expectedId);
+
+        if (expectedIsRuntime) {
+            if (aliasMapping) aliasMapping[expectedId] = info_actual.id;
+            info_expected.id = info_actual.id;
+        } else if (expectedIsTemp) {
+            info_expected.id = info_actual.id;
+        }
+
+        const sameLiteralKind = (!info_actual.literal === !info_expected.literal);
+        const samePropCount = info_actual.prop.length === info_expected.prop.length;
+        const idCompatible = (expectedIsTemp || expectedIsRuntime)
+            ? true
+            : info_actual.id === info_expected.id;
+        const labelCompatible = info_actual.literal || info_expected.literal
+            ? true
+            : info_actual.label === info_expected.label;
+        const isMatching = sameLiteralKind && samePropCount && idCompatible && labelCompatible;
+
+        if (!isMatching) return false;
+
+        if (info_actual.checked) return true;
+        info_actual.checked = true;
+        info_expected.checked = true;
+
+        return info_actual.prop.every((prop) => {
+            const nextObj_actual = obj_actual[prop];
+            const nextObj_expected = obj_expected[prop];
+            if (!nextObj_expected) return false;
+            return __$__.Testize.traverseForRuntimeAlias(nextObj_actual, nextObj_expected, aliasMapping);
         });
     },
 
@@ -1149,11 +1860,17 @@ __$__.Testize = {
     },
 
 
-    traverseSimultaneously(obj_actual, obj_expected) {
+    traverseSimultaneously(obj_actual, obj_expected, idMapping = undefined) {
         let info_actual = obj_actual.__info;
         let info_expected = obj_expected.__info;
 
-        if (info_expected.id.slice(0, 6) === '__temp') info_expected.id = info_actual.id;
+        if (info_expected.id.slice(0, 6) === '__temp') {
+            if (idMapping) idMapping[info_expected.id] = info_actual.id;
+            info_expected.id = info_actual.id;
+        } else if (__$__.Testize.isRuntimeScopedId(info_expected.id)) {
+            // Runtime scoped IDs are unstable across re-synthesis; compare by structure instead.
+            info_expected.id = info_actual.id;
+        }
         let isMatching = (info_actual.prop.length === info_expected.prop.length)
                       && (info_actual.id          === info_expected.id)
                       && (info_actual.label       === info_expected.label)
@@ -1170,7 +1887,7 @@ __$__.Testize = {
                     let nextObj_expected = obj_expected[prop];
                     if (!nextObj_expected) return false;
 
-                    let result = __$__.Testize.traverseSimultaneously(nextObj_actual, nextObj_expected);
+                    let result = __$__.Testize.traverseSimultaneously(nextObj_actual, nextObj_expected, idMapping);
 
                     return result;
                 });
@@ -1979,6 +2696,11 @@ __$__.Testize = {
                         column: node.loc.end.column
                     }
                 };
+                const methodName = __$__.Testize.extractMethodNameFromCallNode(node);
+                if (methodName) {
+                    registerPos.methodName = methodName;
+                    __$__.Testize.callMethodNameByLabel[node.label] = methodName;
+                }
 
                 // find first open parenthesis
                 for (let i = 0; i < arrayOfTextContainsParenthesis.length; i++) {
@@ -2051,6 +2773,12 @@ __$__.Testize = {
         let context_sensitiveID = __$__.Context.SpecifiedContext[loopLabelAroundCall];
         __$__.Testize.removeMarker(__$__.Testize.storedTest[callLabel]);
         delete __$__.Testize.storedTest[callLabel][context_sensitiveID];
+        if (__$__.Testize.storedCallArguments[callLabel]) {
+            delete __$__.Testize.storedCallArguments[callLabel][context_sensitiveID];
+            if (Object.keys(__$__.Testize.storedCallArguments[callLabel]).length === 0) {
+                delete __$__.Testize.storedCallArguments[callLabel];
+            }
+        }
         __$__.Testize.hoveringCallInfo = {};
     },
 
@@ -2083,10 +2811,29 @@ __$__.Testize = {
 
         __$__.Testize.removeMarker(__$__.Testize.storedTest[callLabel], markerID, markerRange, clazz);
 
+        let callArguments = __$__.Testize.storedCallArguments[callLabel]
+            && __$__.Testize.storedCallArguments[callLabel][context_sensitiveID];
+        if (!callArguments) {
+            callArguments = {
+                arguments: [],
+                argumentTypes: [],
+                argumentNames: []
+            };
+        }
+
         __$__.Testize.storedTest[callLabel][context_sensitiveID] = {
             testData: expectedGraphData,
             passed: false,
-            operations: __$__.Testize.focusedTestOperations
+            operations: __$__.Testize.focusedTestOperations,
+            arguments: callArguments.arguments.slice(),
+            argumentTypes: callArguments.argumentTypes.slice(),
+            argumentNames: callArguments.argumentNames.slice(),
+            methodName: __$__.Testize.normalizeMethodName(
+                (__$__.Testize.callParenthesisPos[callLabel] && __$__.Testize.callParenthesisPos[callLabel].methodName)
+                || __$__.Testize.callMethodNameByLabel[callLabel]
+                || callLabel.split('.').pop()
+                || "unknown"
+            )
         };
 
         __$__.Testize.focusedTestOperations = undefined;
@@ -2194,6 +2941,7 @@ __$__.Testize = {
                     if (compare(start, '<=', pos.start) && compare(pos.end, '<=', end)) {
                         __$__.editor.session.removeMarker(markerID);
                         delete __$__.Testize.storedTest[callLabel];
+                        delete __$__.Testize.storedCallArguments[callLabel];
                     } else {
                         let changed = __$__.UpdateLabelPos.modify_by_remove(editEvent, pos);
                         if (changed) {
