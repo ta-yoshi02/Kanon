@@ -800,7 +800,10 @@ __$__.Testize = {
             }
         }
         if (!runtimeToTempMap || typeof runtimeToTempMap !== 'object') return resolvedId;
-        return runtimeToTempMap[resolvedId] || runtimeToTempMap[id] || resolvedId;
+        // Only runtime-scoped IDs are unstable enough to rewrite into temp IDs.
+        // Stable graph IDs such as main-new2 must survive normalization unchanged.
+        if (!__$__.Testize.isRuntimeScopedId(resolvedId)) return resolvedId;
+        return runtimeToTempMap[resolvedId] || resolvedId;
     },
 
     mergeRuntimeIdMapping(runtimeToTempMap, idMapping) {
@@ -809,6 +812,7 @@ __$__.Testize = {
             const runtimeId = idMapping[tempId];
             if (typeof tempId !== 'string' || typeof runtimeId !== 'string') return;
             if (!runtimeId.length || !tempId.length) return;
+            if (!__$__.Testize.isRuntimeScopedId(runtimeId)) return;
             if (!(runtimeId in runtimeToTempMap)) {
                 runtimeToTempMap[runtimeId] = tempId;
             }
@@ -825,6 +829,19 @@ __$__.Testize = {
                 runtimeAliasMap[fromId] = toId;
             }
         });
+    },
+
+    sanitizeIdMapping(idMapping) {
+        if (!idMapping || typeof idMapping !== 'object') return null;
+        const filtered = {};
+        Object.keys(idMapping).forEach((tempId) => {
+            const runtimeId = idMapping[tempId];
+            if (typeof tempId !== 'string' || typeof runtimeId !== 'string') return;
+            if (!tempId.startsWith('__temp')) return;
+            if (!__$__.Testize.isRuntimeScopedId(runtimeId)) return;
+            filtered[tempId] = runtimeId;
+        });
+        return Object.keys(filtered).length > 0 ? filtered : null;
     },
 
     normalizeOperationsWithRuntimeMap(operations, runtimeToTempMap, runtimeAliasMap = undefined) {
@@ -989,6 +1006,7 @@ __$__.Testize = {
                         }
                     });
                 }
+                idMapping = __$__.Testize.sanitizeIdMapping(idMapping);
                 if (idMapping && Object.keys(idMapping).length > 0) {
                     __$__.Testize.mergeRuntimeIdMapping(runtimeToTempMap, idMapping);
                 }
