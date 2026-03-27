@@ -1,0 +1,94 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Kanon
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Checkout RefSyn
+        uses: actions/checkout@v4
+        with:
+          repository: ta-yoshi02/RefSyn
+          path: refsyn
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --version 0.2.100 --locked
+
+      - name: Install Kanon dependencies
+        run: npm install
+
+      - name: Build RefSyn wasm package
+        run: node web/scripts/build-wasm.mjs
+        working-directory: refsyn
+
+      - name: Bundle RefSyn browser runtime into Kanon
+        run: npm run build-refsyn-runtime
+        env:
+          REFSYN_DIR: ${{ github.workspace }}/refsyn
+
+      - name: Verify RefSyn browser synthesis response
+        run: npm run verify-refsyn-browser
+        env:
+          REFSYN_DIR: ${{ github.workspace }}/refsyn
+
+      - name: Build GitHub Pages artifact
+        run: npm run build-pages
+
+      - name: Sanity-check bundled runtime paths
+        run: |
+          test -f dist/src/js/vendor/refsyn-browser-runtime.js
+          if rg -n 'http://localhost:3030' dist/src/js/vendor; then
+            echo "runtime bundle must not depend on localhost backend"
+            exit 1
+          fi
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

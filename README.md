@@ -8,7 +8,7 @@ the data structures constructed during the execution of the code appears as a gr
 
 ## How to use
 
-Kanon runs on your browser.  Open the following page: [https://prg-titech.github.io/Kanon/](https://prg-titech.github.io/Kanon/).
+Kanon runs on your browser. Open the following page: [https://ta-yoshi02.github.io/Kanon/](https://ta-yoshi02.github.io/Kanon/).
 
 ## How to build
 
@@ -24,13 +24,35 @@ After downloaded, go to the Kanon directory and execute the following command.
 npm install
 ```
 
-Then, execute a following command and open http://localhost:8000/ to view the application.
+Then, execute the following command and open http://localhost:8000/ to view the application.
 
 ```
 npm start
 ```
 
 (You can change the port by using `npm start -- --port=8001`).
+
+### GitHub Pages Build
+
+Production deploys are built in this repository and published to GitHub Pages by [`.github/workflows/pages.yml`](./.github/workflows/pages.yml).
+
+- `Kanon` remains the deploy owner.
+- `RefSyn` is checked out only during the build job.
+- the public site bundles a browser-only `wasm + Web Worker + escher-ts` runtime
+- non-local hosts do not fall back to `http://localhost:3030/synthesize`
+
+To build the same Pages artifact locally, prepare a sibling `RefSyn` checkout and run:
+
+```sh
+npm install
+node ../RefSyn/web/scripts/build-wasm.mjs
+REFSYN_DIR=../RefSyn npm run build-refsyn-runtime
+REFSYN_DIR=../RefSyn npm run verify-refsyn-browser
+npm run build-pages
+python3 -m http.server 8000 --directory dist
+```
+
+The generated static artifact is written to `dist/`. The Pages build injects `src/js/vendor/refsyn-browser-runtime.js` into `dist/index.html`, so synthesis runs in-browser on `/Kanon/` without any backend server.
 
 ### Desptop Application
 
