@@ -21,12 +21,12 @@ jobs:
 
     steps:
       - name: Checkout Kanon
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
       - name: Checkout RefSyn
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ta-yoshi02/RefSyn
           ref: main
@@ -45,7 +45,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-bindgen-cli
-        run: cargo install wasm-bindgen-cli --version 0.2.100 --locked
+        run: cargo install wasm-bindgen-cli --version 0.2.114 --locked
 
       - name: Install Kanon dependencies
         run: npm install
