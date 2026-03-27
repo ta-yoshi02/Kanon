@@ -31,11 +31,17 @@ jobs:
           repository: ta-yoshi02/RefSyn
           ref: main
           path: refsyn
-          submodules: recursive
           token: ${{ secrets.REFSYN_REPO_TOKEN }}
 
+      - name: Checkout escher-ts runtime dependency
+        uses: actions/checkout@v5
+        with:
+          repository: ta-yoshi02/escher-ts
+          ref: 6c44eadaceff72b7233ab8d51bc7abf530f269e0
+          path: refsyn/external/escher-ts
+
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -57,6 +63,9 @@ jobs:
       - name: Build escher-ts distribution
         run: npm run build
         working-directory: refsyn/external/escher-ts
+
+      - name: Verify escher-ts runtime artifact
+        run: test -f refsyn/external/escher-ts/dist/refsyn.js
 
       - name: Build RefSyn wasm package
         run: node web/scripts/build-wasm.mjs
