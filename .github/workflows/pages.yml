@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: ta-yoshi02/escher-ts
-          ref: 6c44eadaceff72b7233ab8d51bc7abf530f269e0
+          ref: main
           path: refsyn/external/escher-ts
 
       - name: Setup Node.js
@@ -80,6 +80,15 @@ jobs:
         run: npm run verify-refsyn-browser
         env:
           REFSYN_DIR: ${{ github.workspace }}/refsyn
+
+      - name: Record resolved revisions
+        run: |
+          {
+            echo "## Resolved revisions"
+            echo "- Kanon: $(git rev-parse HEAD)"
+            echo "- RefSyn: $(git -C refsyn rev-parse HEAD)"
+            echo "- escher-ts: $(git -C refsyn/external/escher-ts rev-parse HEAD)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build GitHub Pages artifact
         run: npm run build-pages
