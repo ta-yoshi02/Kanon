@@ -11,7 +11,7 @@ const refsynDir = process.env.REFSYN_DIR
 const fixturePath = resolve(rootDir, "json/refsyn-append-request.json");
 const wasmJsPath = resolve(refsynDir, "web/pkg/refsyn.js");
 const wasmPath = resolve(refsynDir, "web/pkg/refsyn_bg.wasm");
-const escherPath = resolve(refsynDir, "external/escher-ts/dist/refsyn.js");
+const adapterPath = resolve(refsynDir, "runtime/refsyn-escher-adapter.mjs");
 
 const request = JSON.parse(await readFile(fixturePath, "utf8"));
 const wasm = await import(pathToFileURL(wasmJsPath).href);
@@ -26,7 +26,7 @@ const artifacts = JSON.parse(rawArtifacts);
 const response = JSON.parse(JSON.stringify(artifacts.response));
 
 if (artifacts.task_json) {
-  const { runRefsynTasks } = await import(pathToFileURL(escherPath).href);
+  const { applyRefsynTaskOutcomes, runRefsynTasks } = await import(pathToFileURL(adapterPath).href);
   const tasks = JSON.parse(artifacts.task_json);
   const outcomes = runRefsynTasks(tasks, {
     quiet: true,
@@ -35,39 +35,9 @@ if (artifacts.task_json) {
     searchSizeFactor: 3,
   });
 
-  const existing = Array.isArray(response.escher_results) ? response.escher_results : [];
-  response.escher_results = existing.slice();
   response.code = Array.isArray(response.code) ? response.code : [];
   response.individual_codes = Array.isArray(response.individual_codes) ? response.individual_codes : [];
-
-  for (const outcome of outcomes) {
-    response.escher_results.push({
-      name: outcome.name,
-      success: outcome.success,
-      rendered: outcome.rendered,
-      error: outcome.error,
-    });
-
-    if (typeof outcome.compiled_js === "string" && outcome.compiled_js.length > 0) {
-      response.code.push(outcome.compiled_js);
-      response.individual_codes.push(`${outcome.name}: ${outcome.compiled_js}`);
-      continue;
-    }
-
-    if (typeof outcome.error === "string" && outcome.error.length > 0) {
-      response.individual_codes.push(`${outcome.name}: ERROR ${outcome.error}`);
-      continue;
-    }
-
-    if (typeof outcome.rendered === "string" && outcome.rendered.length > 0) {
-      response.individual_codes.push(
-        `${outcome.name}: ERROR compiled_js missing for rendered term ${outcome.rendered}`,
-      );
-      continue;
-    }
-
-    response.individual_codes.push(`${outcome.name}: no output`);
-  }
+  applyRefsynTaskOutcomes(response, outcomes);
 }
 
 const assert = (condition, message) => {

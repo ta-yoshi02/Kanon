@@ -1,4 +1,4 @@
-import { runRefsynTasks } from "@refsyn/escher";
+import { applyRefsynTaskOutcomes, runRefsynTasks } from "@refsyn/escher-adapter";
 
 const defaultOptions = {
     maxCost: 20,
@@ -19,42 +19,6 @@ const appendWarnings = (response, warnings = []) => {
         : text;
 };
 
-const applyTaskOutcomes = (response, outcomes) => {
-    const existing = Array.isArray(response.escher_results) ? response.escher_results : [];
-    const merged = existing.slice();
-
-    for (const outcome of outcomes) {
-        merged.push({
-            name: outcome.name,
-            success: outcome.success,
-            rendered: outcome.rendered,
-            error: outcome.error
-        });
-
-        if (typeof outcome.compiled_js === "string" && outcome.compiled_js.length > 0) {
-            response.code.push(outcome.compiled_js);
-            response.individual_codes.push(`${outcome.name}: ${outcome.compiled_js}`);
-            continue;
-        }
-
-        if (typeof outcome.error === "string" && outcome.error.length > 0) {
-            response.individual_codes.push(`${outcome.name}: ERROR ${outcome.error}`);
-            continue;
-        }
-
-        if (typeof outcome.rendered === "string" && outcome.rendered.length > 0) {
-            response.individual_codes.push(
-                `${outcome.name}: ERROR compiled_js missing for rendered term ${outcome.rendered}`,
-            );
-            continue;
-        }
-
-        response.individual_codes.push(`${outcome.name}: no output`);
-    }
-
-    response.escher_results = merged;
-};
-
 export const completeBrowserSynthesis = async (artifacts, options = {}) => {
     const response = cloneResponse(artifacts.response);
     appendWarnings(response, artifacts.warnings);
@@ -70,7 +34,7 @@ export const completeBrowserSynthesis = async (artifacts, options = {}) => {
         timeoutMs: options.timeoutMs ?? defaultOptions.timeoutMs,
         searchSizeFactor: options.searchSizeFactor ?? defaultOptions.searchSizeFactor
     });
-    applyTaskOutcomes(response, outcomes);
+    applyRefsynTaskOutcomes(response, outcomes);
     return response;
 };
 

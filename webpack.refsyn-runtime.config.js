@@ -11,7 +11,8 @@ const resolveRefsynPath = (...parts) => path.resolve(refsynDir, ...parts);
 const requiredPaths = [
   resolveRefsynPath("web/pkg/refsyn.js"),
   resolveRefsynPath("web/pkg/refsyn_bg.wasm"),
-  resolveRefsynPath("external/escher-ts/dist/refsyn.js"),
+  resolveRefsynPath("runtime/refsyn-escher-adapter.mjs"),
+  resolveRefsynPath("external/escher-ts/dist/index.js"),
 ];
 
 for (const requiredPath of requiredPaths) {
@@ -39,7 +40,7 @@ module.exports = {
   resolve: {
     alias: {
       "@refsyn/wasm": resolveRefsynPath("web/pkg/refsyn.js"),
-      "@refsyn/escher": resolveRefsynPath("external/escher-ts/dist/refsyn.js"),
+      "@refsyn/escher-adapter": resolveRefsynPath("runtime/refsyn-escher-adapter.mjs"),
     },
   },
 
