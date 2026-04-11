@@ -37,9 +37,11 @@ npm start
 Production deploys are built in this repository and published to GitHub Pages by [`.github/workflows/pages.yml`](./.github/workflows/pages.yml).
 
 - `Kanon` remains the deploy owner.
-- `RefSyn` is checked out only during the build job.
+- `RefSyn` is checked out only during the build job from `ta-yoshi02/RefSyn@main`.
+- `escher-ts` is checked out during the build job from `ta-yoshi02/escher-ts@main`.
 - the public site bundles a browser-only `wasm + Web Worker + escher-ts` runtime
 - non-local hosts do not fall back to `http://localhost:3030/synthesize`
+- the workflow summary records the exact resolved SHAs used for the deploy
 
 To build the same Pages artifact locally, prepare a sibling `RefSyn` checkout and run:
 
@@ -53,6 +55,8 @@ python3 -m http.server 8000 --directory dist
 ```
 
 The generated static artifact is written to `dist/`. The Pages build injects `src/js/vendor/refsyn-browser-runtime.js` into `dist/index.html`, so synthesis runs in-browser on `/Kanon/` without any backend server.
+
+Latest-head verification is handled separately by [`.github/workflows/verify-latest.yml`](./.github/workflows/verify-latest.yml). That workflow builds the browser runtime from `Kanon@master`, `RefSyn@main`, and `escher-ts@main`, records the resolved SHAs, and stops after build/verification without deploying Pages.
 
 ### Desptop Application
 

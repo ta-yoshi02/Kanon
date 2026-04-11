@@ -1,0 +1,103 @@
+name: Verify Latest Browser Runtime
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+  repository_dispatch:
+    types:
+      - verify-latest-browser-runtime
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-latest-browser-runtime
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Kanon
+        uses: actions/checkout@v5
+        with:
+          ref: master
+          submodules: recursive
+
+      - name: Checkout RefSyn
+        uses: actions/checkout@v5
+        with:
+          repository: ta-yoshi02/RefSyn
+          ref: main
+          path: refsyn
+          token: ${{ secrets.REFSYN_REPO_TOKEN }}
+
+      - name: Checkout escher-ts runtime dependency
+        uses: actions/checkout@v5
+        with:
+          repository: ta-yoshi02/escher-ts
+          ref: main
+          path: refsyn/external/escher-ts
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --version 0.2.114 --locked
+
+      - name: Install Kanon dependencies
+        run: npm install
+
+      - name: Install escher-ts dependencies
+        run: npm install
+        working-directory: refsyn/external/escher-ts
+
+      - name: Build escher-ts distribution
+        run: npm run build
+        working-directory: refsyn/external/escher-ts
+
+      - name: Verify escher-ts distribution entrypoint
+        run: test -f refsyn/external/escher-ts/dist/index.js
+
+      - name: Build RefSyn wasm package
+        run: node web/scripts/build-wasm.mjs
+        working-directory: refsyn
+
+      - name: Bundle RefSyn browser runtime into Kanon
+        run: npm run build-refsyn-runtime
+        env:
+          REFSYN_DIR: ${{ github.workspace }}/refsyn
+
+      - name: Verify RefSyn browser synthesis response
+        run: npm run verify-refsyn-browser
+        env:
+          REFSYN_DIR: ${{ github.workspace }}/refsyn
+
+      - name: Build GitHub Pages artifact
+        run: npm run build-pages
+
+      - name: Sanity-check bundled runtime paths
+        run: |
+          test -f dist/src/js/vendor/refsyn-browser-runtime.js
+          if rg -n 'http://localhost:3030' dist/src/js/vendor; then
+            echo "runtime bundle must not depend on localhost backend"
+            exit 1
+          fi
+
+      - name: Record resolved revisions
+        run: |
+          {
+            echo "## Resolved revisions"
+            echo "- Kanon: $(git rev-parse HEAD)"
+            echo "- RefSyn: $(git -C refsyn rev-parse HEAD)"
+            echo "- escher-ts: $(git -C refsyn/external/escher-ts rev-parse HEAD)"
+          } >> "$GITHUB_STEP_SUMMARY"
