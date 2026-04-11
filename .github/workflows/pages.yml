@@ -64,8 +64,8 @@ jobs:
         run: npm run build
         working-directory: refsyn/external/escher-ts
 
-      - name: Verify escher-ts runtime artifact
-        run: test -f refsyn/external/escher-ts/dist/refsyn.js
+      - name: Verify escher-ts distribution entrypoint
+        run: test -f refsyn/external/escher-ts/dist/index.js
 
       - name: Build RefSyn wasm package
         run: node web/scripts/build-wasm.mjs
