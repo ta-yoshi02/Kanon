@@ -909,7 +909,14 @@ __$__.Testize = {
         return { ok: false };
     },
 
-    storeCallArguments(callLabel, context_sensitiveID, args) {
+    normalizeCallReceiver(value) {
+        if (value && typeof value === 'object' && value.__id) {
+            return { ok: true, value: value.__id };
+        }
+        return { ok: false };
+    },
+
+    storeCallArguments(callLabel, context_sensitiveID, args, receiver = undefined) {
         if (!callLabel || !context_sensitiveID || !Array.isArray(args)) {
             return;
         }
@@ -920,6 +927,7 @@ __$__.Testize = {
         const encodedValues = [];
         const encodedTypes = [];
         const encodedNames = [];
+        const encodedReceiver = __$__.Testize.normalizeCallReceiver(receiver);
         let unsupported = false;
 
         args.forEach((arg, idx) => {
@@ -937,16 +945,21 @@ __$__.Testize = {
             __$__.Testize.storedCallArguments[callLabel][context_sensitiveID] = {
                 arguments: [],
                 argumentTypes: [],
-                argumentNames: []
+                argumentNames: [],
+                receiverObject: encodedReceiver.ok ? encodedReceiver.value : undefined
             };
             return;
         }
 
-        __$__.Testize.storedCallArguments[callLabel][context_sensitiveID] = {
+        const stored = {
             arguments: encodedValues,
             argumentTypes: encodedTypes,
             argumentNames: encodedNames
         };
+        if (encodedReceiver.ok) {
+            stored.receiverObject = encodedReceiver.value;
+        }
+        __$__.Testize.storedCallArguments[callLabel][context_sensitiveID] = stored;
     },
 
 
@@ -963,16 +976,6 @@ __$__.Testize = {
 
                 const test = __$__.Testize.storedTest[callLabel][contextID];
                 if (!test.operations || !Array.isArray(test.operations)) continue;
-                
-                // receiverを特定（main-new1など）
-                let receiverObject = "main-new1"; // デフォルト値
-                // 操作から自動検出する場合
-                for (const op of test.operations) {
-                    if (op.from && op.from.startsWith("main-new")) {
-                        receiverObject = op.from;
-                        break;
-                    }
-                }
                 
                 // メソッド名を取得（appendなど）
                 const methodNameFromPos = (__$__.Testize.callParenthesisPos[callLabel]
@@ -999,6 +1002,17 @@ __$__.Testize = {
                 const serializedArgNames = Array.isArray(test.argumentNames) && test.argumentNames.length > 0
                     ? test.argumentNames
                     : (runtimeCallArgs && Array.isArray(runtimeCallArgs.argumentNames) ? runtimeCallArgs.argumentNames : []);
+                let receiverObject = (runtimeCallArgs && typeof runtimeCallArgs.receiverObject === 'string')
+                    ? runtimeCallArgs.receiverObject
+                    : "main-new1";
+                if (!runtimeCallArgs || typeof runtimeCallArgs.receiverObject !== 'string') {
+                    for (const op of test.operations) {
+                        if (op.from && op.from.startsWith("main-new")) {
+                            receiverObject = op.from;
+                            break;
+                        }
+                    }
+                }
                 const actualGraphSource = __$__.Testize.storedActualGraph[callLabel]
                     && __$__.Testize.storedActualGraph[callLabel][contextID];
                 const actualGraphPayload = actualGraphSource

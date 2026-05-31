@@ -496,7 +496,10 @@ __$__.ASTTransforms = {
                                             [
                                                 b.Literal(label),
                                                 b.Identifier('__context_sensitiveID'),
-                                                b.Identifier('args')
+                                                b.Identifier('args'),
+                                                (node.callee.type === 'MemberExpression')
+                                                    ? b.Identifier('__obj')
+                                                    : b.Identifier('undefined')
                                             ]
                                         )
                                     ),
