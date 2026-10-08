@@ -916,7 +916,101 @@ __$__.Testize = {
         return { ok: false };
     },
 
-    storeCallArguments(callLabel, context_sensitiveID, args, receiver = undefined) {
+    captureValidationState(callLabel, contextSensitiveID, args, receiver, roots) {
+        try {
+            const source = __$__.editor.getValue();
+            const ast = __$__.Testize.parseEditorAst();
+            const classes = ast.body.filter(node => node.type === 'ClassDeclaration').map(node => {
+                if (node.superClass) throw new Error('Validation does not support inherited classes');
+                return { name: node.id.name, source: source.slice(node.range[0], node.range[1]), referenceFields: [] };
+            });
+            const classMap = new Map(classes.map(entry => [entry.name, entry]));
+            const objects = [];
+            const seen = new Map();
+            const values = Object.create(null);
+            const encode = value => {
+                if (value === undefined) return { undefined: true };
+                if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+                if (typeof value === 'number' && Number.isFinite(value) && !Object.is(value, -0)) return value;
+                if (!value || typeof value !== 'object' || typeof value.__id !== 'string') throw new Error('Unsupported validation value');
+                visit(value);
+                return { ref: value.__id };
+            };
+            const visit = object => {
+                if (seen.has(object.__id)) {
+                    if (seen.get(object.__id) !== object) throw new Error('Duplicate runtime object ID');
+                    return;
+                }
+                const className = object.__ClassName__ || Object.getPrototypeOf(object).constructor.name;
+                const definition = classMap.get(className);
+                if (!definition) throw new Error(`Missing class definition: ${className}`);
+                if (typeof object.__id !== 'string') throw new Error('Missing runtime object ID');
+                seen.set(object.__id, object);
+                const entry = { id: object.__id, className, fields: Object.create(null) };
+                objects.push(entry);
+                for (const key of Reflect.ownKeys(object)) {
+                    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+                    // These non-enumerable properties belong to Kanon's instrumentation.
+                    if (['__id', '__uniqueid', '__ClassName__', '__info'].includes(key) && !descriptor.enumerable) continue;
+                    if (typeof key !== 'string' || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable || !descriptor.writable || !descriptor.configurable) throw new Error('Validation requires ordinary data fields');
+                    entry.fields[key] = encode(descriptor.value);
+                    if (descriptor.value && typeof descriptor.value === 'object') {
+                        if (!definition.referenceFields.includes(key)) definition.referenceFields.push(key);
+                    } else {
+                        values[`${entry.id}-${key}`] = entry.fields[key];
+                    }
+                }
+            };
+            encode(receiver);
+            const argumentsSnapshot = args.map(encode);
+            roots.forEach(encode);
+            return { source, classes, example: { callLabel, contextSensitiveID, objects, values, arguments: argumentsSnapshot } };
+        } catch (error) {
+            return { error: String(error.message || error) };
+        }
+    },
+
+    storeValidationReturn(callLabel, contextID, value) {
+        const capture = __$__.Testize.storedCallArguments[callLabel]?.[contextID]?.validation;
+        if (!capture || capture.error) return;
+        const stored = __$__.Testize.storedCallArguments[callLabel][contextID];
+        const current = stored.checkValidationState();
+        if (current.error || JSON.stringify(current.example.objects) !== JSON.stringify(capture.example.objects)) {
+            capture.error = 'Existing method changed the heap before demonstration edits; this validation input is unsupported';
+            return;
+        }
+        if (value === undefined) capture.example.returnValue = { undefined: true };
+        else if (value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value) && !Object.is(value, -0))) capture.example.returnValue = value;
+        else if (value && typeof value === 'object' && typeof value.__id === 'string') capture.example.returnValue = { ref: value.__id };
+        else capture.error = 'Unsupported return value';
+    },
+
+    validationPayload(methodCalls, captures) {
+        const classes = new Map();
+        const cases = [];
+        for (let index = 0; index < methodCalls.length; index++) {
+            const call = methodCalls[index];
+            const capture = captures[index];
+            if (!capture || capture.error || capture.source !== __$__.editor.getValue()) return { error: capture?.error || 'Missing or stale validation snapshot; record the demonstration again' };
+            for (const definition of capture.classes) {
+                const previous = classes.get(definition.name);
+                if (previous && previous.source !== definition.source) return { error: 'Conflicting class definitions' };
+                classes.set(definition.name, { ...definition, referenceFields: [...new Set([...(previous?.referenceFields || []), ...definition.referenceFields])] });
+            }
+            const example = JSON.parse(JSON.stringify(capture.example));
+            const returnOps = call.operations.filter(op => ['addVariable', 'editVariableReference'].includes(op.editType) && op.label === 'return');
+            if (returnOps.length) {
+                const target = returnOps[returnOps.length - 1].newTo ?? returnOps[returnOps.length - 1].to;
+                // The validator resolves new object/literal IDs after replaying the edits.
+                example.returnTarget = target;
+                delete example.returnValue;
+            }
+            cases.push(example);
+        }
+        return { version: 1, classes: [...classes.values()], cases };
+    },
+
+    storeCallArguments(callLabel, context_sensitiveID, args, receiver = undefined, roots = undefined) {
         if (!callLabel || !context_sensitiveID || !Array.isArray(args)) {
             return;
         }
@@ -959,6 +1053,10 @@ __$__.Testize = {
         if (encodedReceiver.ok) {
             stored.receiverObject = encodedReceiver.value;
         }
+        if (Array.isArray(roots)) {
+            stored.checkValidationState = () => __$__.Testize.captureValidationState(callLabel, context_sensitiveID, args, receiver, roots);
+            stored.validation = stored.checkValidationState();
+        }
         __$__.Testize.storedCallArguments[callLabel][context_sensitiveID] = stored;
     },
 
@@ -966,6 +1064,8 @@ __$__.Testize = {
     synthesize() {
         // メソッド呼び出しごとに操作をまとめる
         const methodCalls = [];
+        const validationCaptures = [];
+        const synthesisSource = __$__.editor.getValue?.();
         let visGraphPayload = null;
         const runtimeToTempMap = {};
         const runtimeAliasMap = {};
@@ -1115,6 +1215,19 @@ __$__.Testize = {
                 }
 
                 methodCalls.push(methodCallEntry);
+                const capture = test.validation ? JSON.parse(JSON.stringify(test.validation)) : undefined;
+                if (capture?.example) {
+                    const normalize = id => __$__.Testize.normalizeIdWithRuntimeMap(id, runtimeToTempMap, runtimeAliasMap);
+                    const normalizeValue = value => value && typeof value.ref === 'string' ? { ref: normalize(value.ref) } : value;
+                    for (const object of capture.example.objects) {
+                        object.id = normalize(object.id);
+                        object.fields = Object.fromEntries(Object.entries(object.fields).map(([key, value]) => [key, normalizeValue(value)]));
+                    }
+                    capture.example.arguments = capture.example.arguments.map(normalizeValue);
+                    if (Object.hasOwn(capture.example, 'returnValue')) capture.example.returnValue = normalizeValue(capture.example.returnValue);
+                    capture.example.values = Object.fromEntries(Object.entries(capture.example.values).map(([id, value]) => [normalize(id), normalizeValue(value)]));
+                }
+                validationCaptures.push(capture);
             }
         }
 
@@ -1136,11 +1249,17 @@ __$__.Testize = {
         // transport は差し替え可能に保ち、payload 形は固定する
         __$__.Testize.dispatchSynthesisRequest({
             method_calls: methodCalls,
-            vis_graph: visGraphPayload
+            vis_graph: visGraphPayload,
+            validation: __$__.Testize.validationPayload(methodCalls, validationCaptures)
         })
         .then(data => {
             if (!data) {
                 console.warn("合成結果なし");
+                return;
+            }
+
+            if (data.validation?.status !== "passed" || data.validation.checked_demonstrations !== methodCalls.length || synthesisSource !== __$__.editor.getValue?.()) {
+                console.warn("合成結果は未検証または実演に不一致のため反映しません", data.validation);
                 return;
             }
 
@@ -2837,6 +2956,7 @@ __$__.Testize = {
 
         __$__.Testize.storedTest[callLabel][context_sensitiveID] = {
             testData: expectedGraphData,
+            validation: callArguments.validation ? JSON.parse(JSON.stringify(callArguments.validation)) : undefined,
             passed: false,
             operations: __$__.Testize.focusedTestOperations,
             arguments: callArguments.arguments.slice(),

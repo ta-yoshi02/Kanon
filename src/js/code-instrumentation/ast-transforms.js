@@ -499,7 +499,8 @@ __$__.ASTTransforms = {
                                                 b.Identifier('args'),
                                                 (node.callee.type === 'MemberExpression')
                                                     ? b.Identifier('__obj')
-                                                    : b.Identifier('undefined')
+                                                    : b.Identifier('undefined'),
+                                                b.Identifier('__objs')
                                             ]
                                         )
                                     ),
@@ -615,6 +616,15 @@ __$__.ASTTransforms = {
                                                         //node.arguments
                                                         [b.Identifier('...args')]
                                                     )
+                                                )
+                                            ),
+                                            b.ExpressionStatement(
+                                                b.CallExpression(
+                                                    b.MemberExpression(
+                                                        b.MemberExpression(b.Identifier('__$__'), b.Identifier('Testize')),
+                                                        b.Identifier('storeValidationReturn')
+                                                    ),
+                                                    [b.Literal(label), b.Identifier('__context_sensitiveID'), b.Identifier('__retObj')]
                                                 )
                                             ),
                                             b.ExpressionStatement(
