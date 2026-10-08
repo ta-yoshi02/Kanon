@@ -385,47 +385,79 @@ __$__.Testize = {
     },
 
 
-    replaceMethodDefinitionSource(methodName, arityHint, replacementSource, classNameHint) {
-        const info = __$__.Testize.findMethodDefinitionInfo(methodName, arityHint, classNameHint);
-        if (!info || !info.loc || !replacementSource) return false;
+    generatedHelperMarker: '// refsyn: generated helper',
 
-        const start = info.loc.start;
-        const end = info.loc.end;
-        const baseIndent = ' '.repeat(start.column);
-        const adjustedSource = replacementSource
-            .split('\n')
-            .map((line, idx) => idx === 0 ? line : baseIndent + line)
-            .join('\n');
-
-        const range = new __$__.Range(
-            start.line - 1,
-            start.column,
-            end.line - 1,
-            end.column
-        );
-        __$__.editor.session.replace(range, adjustedSource);
-        return true;
+    // Builds the source that the validator executed: the target method replaced, and hole helpers either
+    // added before it or replacing helpers that an earlier synthesis inserted. Anything else is refused.
+    buildValidatedSource(source, className, methodName, composedCode, helperSources) {
+        const parseMembers = text => esprima.parse(text, { range: true }).body;
+        const nameOf = member => member.computed ? undefined : (member.key.type === 'Identifier' ? member.key.name : String(member.key.value));
+        const isMethod = member => member && member.type === 'MethodDefinition' && member.kind === 'method' && !member.static && nameOf(member) !== undefined;
+        const parseMethod = text => {
+            try {
+                const members = parseMembers(`class __RefSynMember { ${text} }`)[0].body.body;
+                return members.length === 1 && isMethod(members[0]) ? nameOf(members[0]) : undefined;
+            } catch (e) {
+                return undefined;
+            }
+        };
+        let program;
+        try {
+            program = parseMembers(source);
+        } catch (e) {
+            return { error: `Source does not parse: ${e.message}` };
+        }
+        const declarations = program.filter(node => node.type === 'ClassDeclaration' && node.id.name === className);
+        if (declarations.length !== 1) return { error: `Class ${className} must be declared exactly once at top level` };
+        const classBody = declarations[0].body;
+        const members = classBody.body;
+        const targets = members.filter(member => nameOf(member) === methodName);
+        if (targets.length !== 1 || !isMethod(targets[0])) return { error: `${className}.${methodName} must be exactly one ordinary method` };
+        if (parseMethod(composedCode) !== methodName) return { error: 'Composed code is not a single definition of the target method' };
+        const names = new Set([methodName]);
+        const added = [];
+        const edits = [];
+        for (const helper of helperSources) {
+            const name = parseMethod(helper);
+            if (!name || names.has(name)) return { error: `Invalid or duplicate generated helper: ${name || helper}` };
+            names.add(name);
+            const existing = members.filter(member => nameOf(member) === name);
+            if (existing.length === 0) {
+                added.push(`${__$__.Testize.generatedHelperMarker}\n${helper}`);
+                continue;
+            }
+            const index = members.indexOf(existing[0]);
+            const gap = source.slice(index === 0 ? classBody.range[0] + 1 : members[index - 1].range[1], existing[0].range[0]);
+            if (existing.length !== 1 || !isMethod(existing[0]) || !gap.includes(__$__.Testize.generatedHelperMarker)) {
+                return { error: `Generated helper ${name} collides with a member that RefSyn did not generate` };
+            }
+            edits.push({ range: existing[0].range, text: helper });
+        }
+        edits.push({ range: targets[0].range, text: [...added, composedCode].join('\n\n') });
+        edits.sort((a, b) => b.range[0] - a.range[0]);
+        let result = source;
+        for (const edit of edits) {
+            const lineStart = source.lastIndexOf('\n', edit.range[0] - 1) + 1;
+            edit.text = edit.text.split('\n').map((line, i) => i === 0 ? line : ' '.repeat(edit.range[0] - lineStart) + line).join('\n');
+            result = result.slice(0, edit.range[0]) + edit.text + result.slice(edit.range[1]);
+        }
+        try {
+            parseMembers(result);
+        } catch (e) {
+            return { error: `Rebuilt source does not parse: ${e.message}` };
+        }
+        return { source: result, edits };
     },
 
-
-    extractMethodNameFromMethodSource(methodSource) {
-        if (typeof methodSource !== 'string') return undefined;
-        const match = methodSource.match(/^\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/);
-        return match ? match[1] : undefined;
-    },
-
-
-    extractMethodArityFromMethodSource(methodSource) {
-        if (typeof methodSource !== 'string') return undefined;
-        const match = methodSource.match(/^\s*(?:function\s+)?[A-Za-z_$][A-Za-z0-9_$]*\s*\(([^)]*)\)/);
-        if (!match) return undefined;
-        const paramsText = match[1].trim();
-        if (paramsText.length === 0) return 0;
-        return paramsText
-            .split(',')
-            .map((param) => param.trim())
-            .filter((param) => param.length > 0)
-            .length;
+    // Applies edits computed on `source` from the end, so earlier offsets stay valid.
+    applySourceEdits(source, edits) {
+        const position = offset => {
+            const before = source.slice(0, offset).split('\n');
+            return [before.length - 1, before[before.length - 1].length];
+        };
+        for (const edit of edits) {
+            __$__.editor.session.replace(new __$__.Range(...position(edit.range[0]), ...position(edit.range[1])), edit.text);
+        }
     },
 
 
@@ -922,7 +954,7 @@ __$__.Testize = {
             const ast = __$__.Testize.parseEditorAst();
             const classes = ast.body.filter(node => node.type === 'ClassDeclaration').map(node => {
                 if (node.superClass) throw new Error('Validation does not support inherited classes');
-                return { name: node.id.name, source: source.slice(node.range[0], node.range[1]), referenceFields: [] };
+                return { name: node.id.name, source: source.slice(node.range[0], node.range[1]) };
             });
             const classMap = new Map(classes.map(entry => [entry.name, entry]));
             const objects = [];
@@ -942,8 +974,7 @@ __$__.Testize = {
                     return;
                 }
                 const className = object.__ClassName__ || Object.getPrototypeOf(object).constructor.name;
-                const definition = classMap.get(className);
-                if (!definition) throw new Error(`Missing class definition: ${className}`);
+                if (!classMap.has(className)) throw new Error(`Missing class definition: ${className}`);
                 if (typeof object.__id !== 'string') throw new Error('Missing runtime object ID');
                 seen.set(object.__id, object);
                 const entry = { id: object.__id, className, fields: Object.create(null) };
@@ -954,11 +985,8 @@ __$__.Testize = {
                     if (['__id', '__uniqueid', '__ClassName__', '__info'].includes(key) && !descriptor.enumerable) continue;
                     if (typeof key !== 'string' || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable || !descriptor.writable || !descriptor.configurable) throw new Error('Validation requires ordinary data fields');
                     entry.fields[key] = encode(descriptor.value);
-                    if (descriptor.value && typeof descriptor.value === 'object') {
-                        if (!definition.referenceFields.includes(key)) definition.referenceFields.push(key);
-                    } else {
-                        values[`${entry.id}-${key}`] = entry.fields[key];
-                    }
+                    // Kanon names literal nodes "<object id>-<field>", and edit operations refer to them by that ID.
+                    if (!descriptor.value || typeof descriptor.value !== 'object') values[`${entry.id}-${key}`] = entry.fields[key];
                 }
             };
             encode(receiver);
@@ -970,44 +998,30 @@ __$__.Testize = {
         }
     },
 
-    storeValidationReturn(callLabel, contextID, value) {
-        const capture = __$__.Testize.storedCallArguments[callLabel]?.[contextID]?.validation;
+    // The demonstration edits the heap left by the existing method, while validation replays them on the pre-call heap.
+    confirmValidationPreState(callLabel, contextID) {
+        const stored = __$__.Testize.storedCallArguments[callLabel]?.[contextID];
+        const capture = stored?.validation;
         if (!capture || capture.error) return;
-        const stored = __$__.Testize.storedCallArguments[callLabel][contextID];
         const current = stored.checkValidationState();
         if (current.error || JSON.stringify(current.example.objects) !== JSON.stringify(capture.example.objects)) {
             capture.error = 'Existing method changed the heap before demonstration edits; this validation input is unsupported';
-            return;
         }
-        if (value === undefined) capture.example.returnValue = { undefined: true };
-        else if (value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value) && !Object.is(value, -0))) capture.example.returnValue = value;
-        else if (value && typeof value === 'object' && typeof value.__id === 'string') capture.example.returnValue = { ref: value.__id };
-        else capture.error = 'Unsupported return value';
     },
 
     validationPayload(methodCalls, captures) {
         const classes = new Map();
         const cases = [];
         for (let index = 0; index < methodCalls.length; index++) {
-            const call = methodCalls[index];
             const capture = captures[index];
             if (!capture || capture.error || capture.source !== __$__.editor.getValue()) return { error: capture?.error || 'Missing or stale validation snapshot; record the demonstration again' };
             for (const definition of capture.classes) {
-                const previous = classes.get(definition.name);
-                if (previous && previous.source !== definition.source) return { error: 'Conflicting class definitions' };
-                classes.set(definition.name, { ...definition, referenceFields: [...new Set([...(previous?.referenceFields || []), ...definition.referenceFields])] });
+                if (classes.has(definition.name) && classes.get(definition.name).source !== definition.source) return { error: 'Conflicting class definitions' };
+                classes.set(definition.name, definition);
             }
-            const example = JSON.parse(JSON.stringify(capture.example));
-            const returnOps = call.operations.filter(op => ['addVariable', 'editVariableReference'].includes(op.editType) && op.label === 'return');
-            if (returnOps.length) {
-                const target = returnOps[returnOps.length - 1].newTo ?? returnOps[returnOps.length - 1].to;
-                // The validator resolves new object/literal IDs after replaying the edits.
-                example.returnTarget = target;
-                delete example.returnValue;
-            }
-            cases.push(example);
+            cases.push(JSON.parse(JSON.stringify(capture.example)));
         }
-        return { version: 1, classes: [...classes.values()], cases };
+        return { version: 2, classes: [...classes.values()], cases };
     },
 
     storeCallArguments(callLabel, context_sensitiveID, args, receiver = undefined, roots = undefined) {
@@ -1224,7 +1238,6 @@ __$__.Testize = {
                         object.fields = Object.fromEntries(Object.entries(object.fields).map(([key, value]) => [key, normalizeValue(value)]));
                     }
                     capture.example.arguments = capture.example.arguments.map(normalizeValue);
-                    if (Object.hasOwn(capture.example, 'returnValue')) capture.example.returnValue = normalizeValue(capture.example.returnValue);
                     capture.example.values = Object.fromEntries(Object.entries(capture.example.values).map(([id, value]) => [normalize(id), normalizeValue(value)]));
                 }
                 validationCaptures.push(capture);
@@ -1280,63 +1293,16 @@ __$__.Testize = {
 
             let replacedMethod = false;
             if (typeof data.composed_method_code === 'string' && methodCalls.length > 0) {
-                const primaryCall = methodCalls[0];
-                const arityHint = Array.isArray(primaryCall.methodParamNames)
-                    ? primaryCall.methodParamNames.length
-                    : (Array.isArray(primaryCall.arguments) ? primaryCall.arguments.length : undefined);
-                const classNameHint = typeof primaryCall.receiverClassName === 'string'
-                    ? primaryCall.receiverClassName
-                    : undefined;
-                const auxMethods = Array.isArray(data.code)
-                    ? data.code.filter(code => typeof code === 'string' && code.trim().length > 0)
-                    : [];
-                const seenAuxMethods = new Set();
-                const auxMethodEntries = auxMethods
-                    .map((source) => {
-                        const name = __$__.Testize.extractMethodNameFromMethodSource(source);
-                        const arity = __$__.Testize.extractMethodArityFromMethodSource(source);
-                        return { source, name, arity };
-                    })
-                    .filter((entry) => {
-                        if (!entry.name) return false;
-                        const key = `${entry.name}:${entry.arity}`;
-                        if (seenAuxMethods.has(key)) return false;
-                        seenAuxMethods.add(key);
-                        return true;
-                    });
-                const missingAuxMethods = [];
-                const existingAuxMethods = [];
-                auxMethodEntries.forEach((entry) => {
-                    const existing = __$__.Testize.findMethodDefinitionInfo(entry.name, entry.arity, classNameHint);
-                    if (existing) {
-                        existingAuxMethods.push(entry);
-                    } else {
-                        missingAuxMethods.push(entry.source);
-                    }
-                });
-                const replacementSource = missingAuxMethods
-                    .concat([data.composed_method_code])
-                    .join("\n\n");
-                replacedMethod = __$__.Testize.replaceMethodDefinitionSource(
-                    primaryCall.methodName,
-                    arityHint,
-                    replacementSource,
-                    classNameHint
-                );
-                if (!replacedMethod) {
-                    console.warn(`メソッド定義の置換に失敗: ${primaryCall.methodName}`);
+                const [{ methodName, receiverClassName }] = methodCalls;
+                const built = methodCalls.every(call => call.methodName === methodName && call.receiverClassName === receiverClassName)
+                    ? __$__.Testize.buildValidatedSource(synthesisSource, receiverClassName, methodName, data.composed_method_code, Array.isArray(data.code) ? data.code : [])
+                    : { error: 'Demonstrations target different methods' };
+                if (built.error) {
+                    console.warn(`検証済みコードを反映できません: ${built.error}`);
                 } else {
-                    existingAuxMethods.forEach((entry) => {
-                        const replacedAux = __$__.Testize.replaceMethodDefinitionSource(
-                            entry.name,
-                            entry.arity,
-                            entry.source,
-                            classNameHint
-                        );
-                        if (!replacedAux) {
-                            console.warn(`補助メソッド定義の置換に失敗: ${entry.name}`);
-                        }
-                    });
+                    __$__.Testize.applySourceEdits(synthesisSource, built.edits);
+                    replacedMethod = true;
+                    if (__$__.editor.getValue() !== built.source) console.warn('エディタへの反映結果が検証済みのソースと一致しません');
                 }
             }
 

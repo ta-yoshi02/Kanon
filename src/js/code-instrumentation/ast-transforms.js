@@ -622,9 +622,9 @@ __$__.ASTTransforms = {
                                                 b.CallExpression(
                                                     b.MemberExpression(
                                                         b.MemberExpression(b.Identifier('__$__'), b.Identifier('Testize')),
-                                                        b.Identifier('storeValidationReturn')
+                                                        b.Identifier('confirmValidationPreState')
                                                     ),
-                                                    [b.Literal(label), b.Identifier('__context_sensitiveID'), b.Identifier('__retObj')]
+                                                    [b.Literal(label), b.Identifier('__context_sensitiveID')]
                                                 )
                                             ),
                                             b.ExpressionStatement(
