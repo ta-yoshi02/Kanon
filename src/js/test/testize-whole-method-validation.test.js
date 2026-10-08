@@ -153,7 +153,9 @@ test('a helper that would overwrite a user-written method is refused', async () 
     installTest(snapshot);
     const editor = useEditor(userSource);
     await synthesizeWith({ composed_method_code: 'cut() { this.link = this.cutTarget(); }', code: ['cutTarget() { return null; }'], validation: passed });
-    expect(editor.text()).not.toContain('return null');
+    // A refused application leaves the editor untouched; the preview goes to the console only.
+    expect(editor.text()).toBe(userSource);
+    expect(__$__.editor.session.insert).not.toHaveBeenCalled();
     expect(warn.mock.calls.flat().join(' ')).toMatch(/did not generate/);
 });
 
@@ -182,6 +184,12 @@ describe('buildValidatedSource', () => {
         const editor = useEditor(source);
         await synthesizeWith({ composed_method_code: 'cut() { this.link = null; }', code: [], validation: { status: 'passed', checked_demonstrations: 2 } });
         expect(editor.text()).toBe(source);
+        expect(__$__.editor.session.insert).not.toHaveBeenCalled();
         expect(warn.mock.calls.flat().join(' ')).toMatch(/different methods/);
     });
+});
+
+test('literal input records numbers only for canonical decimals', () => {
+    for (const label of ['0', '53', '-8', '2.5', '1e3']) expect(__$__.Testize.literalInputType(label)).toBe('number');
+    for (const label of ['007', '+5', '.5', '5.', ' 5', '', 'x53', 'true', 'Infinity', '1e999']) expect(__$__.Testize.literalInputType(label)).toBe('string');
 });

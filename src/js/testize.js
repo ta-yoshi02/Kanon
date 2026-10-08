@@ -566,6 +566,13 @@ __$__.Testize = {
     },
 
 
+    // Literal input has no type selector, so the type is fixed here and recorded with the demonstration;
+    // replaying, synthesis and validation then read the same value. Only canonical decimals are numbers,
+    // so text such as "007" stays a string.
+    literalInputType(label) {
+        return /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/.test(label) && Number.isFinite(Number(label)) ? 'number' : 'string';
+    },
+
     saveDataWithoutCallback(dataSet, editType, param, id = null) {
         let color = null, type = null;
         if (editType === 'addNode' || editType === 'editNode') {
@@ -575,7 +582,7 @@ __$__.Testize = {
             let isLiteral = document.getElementById('checkboxForLiteral').checked;
             if (isLiteral) {
                 color = __$__.Testize.makeLiteralColor();
-                type = 'string';
+                type = __$__.Testize.literalInputType(label);
             }
 
             if (editType === 'addNode') {
@@ -676,7 +683,7 @@ __$__.Testize = {
                 data.fixed = true;
                 if (data.isLiteral) {
                     data.color = __$__.Testize.makeLiteralColor();
-                    data.type = 'string';
+                    data.type = __$__.Testize.literalInputType(data.label);
                 }
                 saveOperationData = {
                     editType: editType,
@@ -1307,7 +1314,7 @@ __$__.Testize = {
             }
 
             if (!replacedMethod) {
-                // 結果をエディタに挿入（フォールバック）
+                // 反映しなかった結果は診断としてコンソールに出し、エディタは変更しない
                 let resultText = "";
 
                 // 個別のコードを先に表示
@@ -1338,7 +1345,7 @@ __$__.Testize = {
                     }
                 }
 
-                __$__.editor.session.insert(__$__.editor.getCursorPosition(), resultText);
+                console.warn(resultText);
             }
         })
         .catch(err => {
