@@ -1,3 +1,5 @@
+import { applyValidationResult } from "@refsyn/whole-method-validation";
+import { validateInWorker } from "@refsyn/whole-method-validator-client";
 import { applyRefsynTaskOutcomes, runRefsynTasks } from "@refsyn/escher-adapter";
 
 const defaultOptions = {
@@ -19,15 +21,11 @@ const appendWarnings = (response, warnings = []) => {
         : text;
 };
 
-export const completeBrowserSynthesis = async (artifacts, options = {}) => {
+export const completeBrowserSynthesis = async (artifacts, options = {}, request) => {
     const response = cloneResponse(artifacts.response);
     appendWarnings(response, artifacts.warnings);
 
-    if (!artifacts.task_json) {
-        return response;
-    }
-
-    const tasks = JSON.parse(artifacts.task_json);
+    const tasks = artifacts.task_json ? JSON.parse(artifacts.task_json) : [];
     const outcomes = runRefsynTasks(tasks, {
         quiet: true,
         maxCost: options.maxCost ?? defaultOptions.maxCost,
@@ -35,10 +33,11 @@ export const completeBrowserSynthesis = async (artifacts, options = {}) => {
         searchSizeFactor: options.searchSizeFactor ?? defaultOptions.searchSizeFactor
     });
     applyRefsynTaskOutcomes(response, outcomes);
-    return response;
+    const result = await validateInWorker({ request, response, taskNames: tasks.map(task => task.name) });
+    return applyValidationResult(response, result);
 };
 
 export const handleSynthesisMessage = async (runCore, request, options = {}) => {
     const artifacts = await runCore(request, options);
-    return completeBrowserSynthesis(artifacts, options);
+    return completeBrowserSynthesis(artifacts, options, request);
 };

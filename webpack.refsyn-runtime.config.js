@@ -40,6 +40,8 @@ module.exports = {
   resolve: {
     alias: {
       "@refsyn/wasm": resolveRefsynPath("web/pkg/refsyn.js"),
+      "@refsyn/whole-method-validation": resolveRefsynPath("runtime/whole-method-validation.mjs"),
+      "@refsyn/whole-method-validator-client": resolveRefsynPath("runtime/whole-method-validator-client.mjs"),
       "@refsyn/escher-adapter": resolveRefsynPath("runtime/refsyn-escher-adapter.mjs"),
     },
   },
