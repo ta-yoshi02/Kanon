@@ -50,6 +50,11 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: refsyn/external/escher-ts/package.json
+
       - name: Install wasm-bindgen-cli
         run: cargo install wasm-bindgen-cli --version 0.2.114 --locked
 
@@ -57,11 +62,11 @@ jobs:
         run: npm install
 
       - name: Install escher-ts dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
         working-directory: refsyn/external/escher-ts
 
       - name: Build escher-ts distribution
-        run: npm run build
+        run: pnpm run build
         working-directory: refsyn/external/escher-ts
 
       - name: Verify escher-ts distribution entrypoint
