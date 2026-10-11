@@ -60,7 +60,8 @@ test('captures immutable typed pre-state with aliases, cycles and undefined inde
     expect(snapshot.example.objects[1].fields.link).toEqual({ ref: 'a' });
     expect(snapshot.example).not.toHaveProperty('returnValue');
     // Field kinds are not guessed from the values that happened to be observed.
-    expect(snapshot.classes).toEqual([{ name: 'Parcel', source }]);
+    // new Parcel() is evaluated from the class source; field kinds are not guessed from observed values.
+    expect(snapshot.classes).toEqual([{ name: 'Parcel', source, instance: { data: 7, link: null } }]);
 });
 test('sends captured state through the payload builder to the real Node validator', async () => {
     installTest(capture().snapshot);
@@ -68,7 +69,7 @@ test('sends captured state through the payload builder to the real Node validato
     __$__.Testize.synthesize(); await Promise.resolve();
     const request = dispatch.mock.calls[0][0];
     dispatch.mockRestore();
-    expect(request.validation.version).toBe(2);
+    expect(request.validation.version).toBe(3);
     const run = code => {
         const output = spawnSync(process.execPath, [validator], {
             input: JSON.stringify({ request, response: { code: [], composed_method_code: code }, taskNames: [] }), encoding: 'utf8'
@@ -192,4 +193,68 @@ describe('buildValidatedSource', () => {
 test('literal input records numbers only for canonical decimals', () => {
     for (const label of ['0', '53', '-8', '2.5', '1e3']) expect(__$__.Testize.literalInputType(label)).toBe('number');
     for (const label of ['007', '+5', '.5', '5.', ' 5', '', 'x53', 'true', 'Infinity', '1e999']) expect(__$__.Testize.literalInputType(label)).toBe('string');
+});
+
+describe('captureInstance', () => {
+    test('keeps undefined, null and primitives apart', () => {
+        expect(__$__.Testize.captureInstance('Box', 'class Box { constructor() { this.a = undefined; this.b = null; this.c = 0; } }'))
+            .toEqual({ name: 'Box', source: expect.any(String), instance: { a: { undefined: true }, b: null, c: 0 } });
+    });
+    test('reports constructors outside the supported range instead of approximating them', () => {
+        for (const [source, reason] of [
+            ['class Box { constructor() { this.a = {}; } }', /other than a primitive/],
+            ['class Box { constructor() { this.a = counter++; } }', /threw/],
+            ['class Box { constructor() { Object.defineProperty(this, "a", { get() { return 1; }, enumerable: true }); } }', /non-data property/],
+        ]) {
+            expect(__$__.Testize.captureInstance('Box', source).instanceError).toMatch(reason);
+        }
+    });
+});
+
+describe('applyMoldEdits', () => {
+    function demonstrated(operations) {
+        const { a, b } = capture();
+        const outside = { alias: b };
+        __$__.Testize.storedTest = { call: { ctx: { operations, testData: {} } } };
+        const Parcel = Object.getPrototypeOf(a).constructor;
+        const result = __$__.Testize.applyMoldEdits([a, b], { this: a }, 'call', 'ctx', { Parcel });
+        return { a, b, outside, result, Parcel };
+    }
+    test('a deleted edge becomes null, keeping the property, the old target and its aliases', () => {
+        const { a, b, outside, result } = demonstrated([{ editType: 'deleteEdge', from: 'a', to: 'b', label: 'link' }]);
+        expect(Object.hasOwn(a, 'link') && a.link === null).toBe(true);
+        expect(outside.alias).toBe(b);
+        expect(b.link).toBe(a);
+        expect(a.data).toBe(7);
+        expect(result.newObjects).toEqual([]);
+        expect(result.variableReferences).toEqual({ __retObj: undefined });
+    });
+    test('created objects run their constructor instead of starting empty', () => {
+        const { a, result, Parcel } = demonstrated([
+            { editType: 'addNode', id: '__temp1', label: 'Parcel', isLiteral: false },
+            { editType: 'editEdgeReference', from: 'a', label: 'link', oldTo: 'b', newTo: '__temp1' },
+            { editType: 'addVariable', label: 'return', to: '__temp1' },
+        ]);
+        const created = result.newObjects[0];
+        expect(created).toBeInstanceOf(Parcel);
+        expect({ data: created.data, link: created.link }).toEqual({ data: 7, link: null });
+        expect(a.link).toBe(created);
+        expect(result.variableReferences.__retObj).toBe(created);
+    });
+    test('typed literals and existing literal nodes keep their recorded values', () => {
+        const { a } = demonstrated([
+            { editType: 'addNode', id: '__temp1', label: '007', isLiteral: true, type: 'string' },
+            { editType: 'editEdgeReference', from: 'a', label: 'data', oldTo: 'a-data', newTo: '__temp1' },
+            { editType: 'editEdgeReference', from: 'b', label: 'data', oldTo: 'b-data', newTo: 'a-data' },
+        ]);
+        expect(a.data).toBe('007');
+    });
+    test('unsupported edits leave the heap untouched for the display-graph override', () => {
+        const { a, b, result } = demonstrated([
+            { editType: 'deleteEdge', from: 'a', to: 'b', label: 'link' },
+            { editType: 'deleteNode', id: 'b' },
+        ]);
+        expect(result).toBeNull();
+        expect(a.link).toBe(b);
+    });
 });
