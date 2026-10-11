@@ -955,13 +955,37 @@ __$__.Testize = {
         return { ok: false };
     },
 
+    // Evaluates `new C()` from the class's own source, as the template's creation statements do.
+    // Only data properties holding primitives, null or undefined are recorded; anything else is
+    // reported instead of being approximated.
+    captureInstance(name, source) {
+        try {
+            const constructor = new Function(`"use strict"; return (${source});`)();
+            const instance = new constructor();
+            const fields = {};
+            for (const key of Reflect.ownKeys(instance)) {
+                const descriptor = Object.getOwnPropertyDescriptor(instance, key);
+                if (typeof key !== 'string' || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable || !descriptor.writable || !descriptor.configurable) {
+                    return { name, source, instanceError: `new ${name}() defines a non-data property ${String(key)}` };
+                }
+                const value = descriptor.value;
+                if (value === undefined) fields[key] = { undefined: true };
+                else if (value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value) && !Object.is(value, -0))) fields[key] = value;
+                else return { name, source, instanceError: `new ${name}() initializes ${key} with a value other than a primitive, null or undefined` };
+            }
+            return { name, source, instance: fields };
+        } catch (error) {
+            return { name, source, instanceError: `new ${name}() threw: ${error.message || error}` };
+        }
+    },
+
     captureValidationState(callLabel, contextSensitiveID, args, receiver, roots) {
         try {
             const source = __$__.editor.getValue();
             const ast = __$__.Testize.parseEditorAst();
             const classes = ast.body.filter(node => node.type === 'ClassDeclaration').map(node => {
                 if (node.superClass) throw new Error('Validation does not support inherited classes');
-                return { name: node.id.name, source: source.slice(node.range[0], node.range[1]) };
+                return __$__.Testize.captureInstance(node.id.name, source.slice(node.range[0], node.range[1]));
             });
             const classMap = new Map(classes.map(entry => [entry.name, entry]));
             const objects = [];
@@ -1028,7 +1052,7 @@ __$__.Testize = {
             }
             cases.push(JSON.parse(JSON.stringify(capture.example)));
         }
-        return { version: 2, classes: [...classes.values()], cases };
+        return { version: 3, classes: [...classes.values()], cases };
     },
 
     storeCallArguments(callLabel, context_sensitiveID, args, receiver = undefined, roots = undefined) {
@@ -1722,6 +1746,63 @@ __$__.Testize = {
      *
      * @return {Object} result
      */
+    // Continues execution from the demonstrated state with MOLD's meaning: created objects run
+    // their constructor, a deleted edge becomes null, and untouched properties and objects stay.
+    // Returns null, before touching the heap, when the typed pre-call state is unavailable or an
+    // edit is outside MOLD; the caller then keeps Kanon's display-graph override, and synthesis
+    // refuses that demonstration because its capture carries an error or an unsupported edit.
+    applyMoldEdits(objects, probe, callLabel, contextID, classes) {
+        const test = __$__.Testize.storedTest[callLabel]?.[contextID];
+        const capture = __$__.Testize.storedCallArguments[callLabel]?.[contextID]?.validation;
+        if (!test || !Array.isArray(test.operations) || !capture || capture.error) return null;
+        const live = Object.create(null);
+        const collect = object => {
+            if (!object || typeof object !== 'object' || typeof object.__id !== 'string' || live[object.__id]) return;
+            live[object.__id] = object;
+            Object.values(object).forEach(collect);
+        };
+        objects.concat(Object.values(probe)).forEach(collect);
+        const known = new Set([...Object.keys(live), ...Object.keys(capture.example.values || {})]);
+        for (const op of test.operations) {
+            const targets = { addEdge: [op.from, op.to], editEdgeReference: [op.from, op.newTo], deleteEdge: [op.from] }[op.editType];
+            if (op.editType === 'addNode') {
+                if (!op.isLiteral && (typeof classes[op.label] !== 'function' || classes[op.label] === Object)) return null;
+                known.add(op.id);
+            } else if (op.editType === 'addVariable' || op.editType === 'editVariableReference') {
+                if (op.label !== 'return' || !known.has(op.newTo ?? op.to)) return null;
+            } else if (!targets || !targets.every(id => known.has(id))) {
+                return null;
+            }
+        }
+        const literals = Object.create(null);
+        Object.entries(capture.example.values || {}).forEach(([id, value]) => {
+            literals[id] = value && typeof value === 'object' ? undefined : value;
+        });
+        const resolve = id => (id in live ? live[id] : literals[id]);
+        const newObjects = [];
+        const variableReferences = { __retObj: undefined };
+        for (const op of test.operations) {
+            switch (op.editType) {
+                case 'addNode':
+                    if (op.isLiteral) {
+                        literals[op.id] = op.type === 'number' ? Number(op.label) : op.type === 'boolean' ? op.label === 'true' : op.label;
+                    } else {
+                        const object = new classes[op.label]();
+                        Object.setProperty(object, '__id', op.id);
+                        Object.setProperty(object, '__ClassName__', op.label);
+                        live[op.id] = object;
+                        newObjects.push(object);
+                    }
+                    break;
+                case 'addEdge': resolve(op.from)[op.label] = resolve(op.to); break;
+                case 'editEdgeReference': resolve(op.from)[op.label] = resolve(op.newTo); break;
+                case 'deleteEdge': resolve(op.from)[op.label] = null; break;
+                default: variableReferences.__retObj = resolve(op.newTo ?? op.to);
+            }
+        }
+        return { newObjects, variableReferences };
+    },
+
     override(objects, probe, retObj, callLabel, context_sensitiveID, classes) {
         let variableReferences = {};
         let newObjects = [];
@@ -1961,7 +2042,8 @@ __$__.Testize = {
             };
         } else {
             // if failed
-            return __$__.Testize.override(objects, probe, retObj, callLabel, context_sensitiveID, classes);
+            return __$__.Testize.applyMoldEdits(objects, probe, callLabel, context_sensitiveID, classes)
+                || __$__.Testize.override(objects, probe, retObj, callLabel, context_sensitiveID, classes);
         }
     },
 
