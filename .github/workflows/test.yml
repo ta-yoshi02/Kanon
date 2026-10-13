@@ -1,0 +1,51 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jest:
+    runs-on: ubuntu-latest
+
+    steps:
+      # The capture tests run RefSyn's validator from ../../../../scripts, so Kanon is checked
+      # out where RefSyn keeps it as a submodule.
+      - name: Checkout RefSyn
+        uses: actions/checkout@v5
+        with:
+          repository: ta-yoshi02/RefSyn
+          ref: main
+
+      - name: Checkout Kanon
+        uses: actions/checkout@v5
+        with:
+          path: Kanon
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        working-directory: Kanon
+        run: |
+          npm install --ignore-scripts
+          npm install --ignore-scripts --prefix external/escodegen
+
+      # testize-argument-overlay.test.js is left out: it tests overlay helpers whose
+      # implementation was never committed, and whether to finish or drop that feature is open.
+      - name: Jest
+        working-directory: Kanon
+        run: npx jest --testPathIgnorePatterns external testize-argument-overlay
