@@ -254,7 +254,52 @@ describe('applyMoldEdits', () => {
             { editType: 'deleteEdge', from: 'a', to: 'b', label: 'link' },
             { editType: 'deleteNode', id: 'b' },
         ]);
-        expect(result).toBeNull();
+        expect(typeof result).toBe('string');
         expect(a.link).toBe(b);
+    });
+    const creatingAfterADelete = [
+        { editType: 'deleteEdge', from: 'a', to: 'b', label: 'link' },
+        { editType: 'addNode', id: '__temp1', label: 'Parcel', isLiteral: false },
+        { editType: 'addEdge', from: '__temp1', label: 'link', to: 'a' },
+    ];
+    test('a class whose new C() was not captured is not constructed and nothing is written', () => {
+        const { a, b } = capture();
+        const Parcel = Object.getPrototypeOf(a).constructor;
+        const snapshot = __$__.Testize.storedCallArguments.call.ctx.validation;
+        snapshot.classes = [{ name: 'Parcel', source, instanceError: 'new Parcel() threw: boom' }];
+        const constructed = jest.fn();
+        const Spy = class extends Parcel { constructor() { super(); constructed(); } };
+        __$__.Testize.storedTest = { call: { ctx: { operations: creatingAfterADelete, testData: {} } } };
+        const result = __$__.Testize.applyMoldEdits([a, b], { this: a }, 'call', 'ctx', { Parcel: Spy });
+        expect(result).toMatch(/new Parcel\(\) threw: boom/);
+        expect(constructed).not.toHaveBeenCalled();
+        expect(a.link).toBe(b);
+    });
+    test('a constructor that throws while reflecting leaves the heap untouched', () => {
+        const { a, b } = capture();
+        const Parcel = Object.getPrototypeOf(a).constructor;
+        const Failing = class extends Parcel { constructor() { throw new Error('boom'); } };
+        __$__.Testize.storedTest = { call: { ctx: { operations: creatingAfterADelete, testData: {} } } };
+        const result = __$__.Testize.applyMoldEdits([a, b], { this: a }, 'call', 'ctx', { Parcel: Failing });
+        expect(result).toMatch(/boom/);
+        expect(a.link).toBe(b);
+        expect(b.link).toBe(a);
+    });
+});
+
+describe('testAndOverride', () => {
+    test('a demonstration reflected by the display-graph fallback is not synthesized', () => {
+        const { a, b, snapshot } = capture();
+        installTest(snapshot);
+        __$__.Testize.storedTest.call.ctx.operations = [{ editType: 'deleteNode', id: 'b' }];
+        jest.spyOn(__$__.Testize, 'checkActualGraph').mockReturnValue(false);
+        const fallback = { newObjects: [], variableReferences: {} };
+        const override = jest.spyOn(__$__.Testize, 'override').mockReturnValue(fallback);
+        const Parcel = Object.getPrototypeOf(a).constructor;
+        expect(__$__.Testize.testAndOverride([a, b], { this: a }, undefined, 'call', 'ctx', false, { Parcel })).toBe(fallback);
+        expect(override).toHaveBeenCalledTimes(1);
+        const test = __$__.Testize.storedTest.call.ctx;
+        expect(__$__.Testize.validationPayload([{}], [test.validation]).error).toMatch(/display-graph/);
+        jest.restoreAllMocks();
     });
 });

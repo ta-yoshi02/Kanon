@@ -1748,13 +1748,15 @@ __$__.Testize = {
      */
     // Continues execution from the demonstrated state with MOLD's meaning: created objects run
     // their constructor, a deleted edge becomes null, and untouched properties and objects stay.
-    // Returns null, before touching the heap, when the typed pre-call state is unavailable or an
-    // edit is outside MOLD; the caller then keeps Kanon's display-graph override, and synthesis
-    // refuses that demonstration because its capture carries an error or an unsupported edit.
+    // Returns the reason, before touching the heap, when the typed pre-call state is unavailable,
+    // `new C()` was not captured or throws, or an edit is outside MOLD; the caller then falls back
+    // to Kanon's display-graph override. All objects are constructed before the first write so
+    // that a throwing constructor cannot leave a half-applied demonstration behind.
     applyMoldEdits(objects, probe, callLabel, contextID, classes) {
         const test = __$__.Testize.storedTest[callLabel]?.[contextID];
         const capture = __$__.Testize.storedCallArguments[callLabel]?.[contextID]?.validation;
-        if (!test || !Array.isArray(test.operations) || !capture || capture.error) return null;
+        if (!test || !Array.isArray(test.operations)) return 'The demonstration has no recorded edits';
+        if (!capture || capture.error) return capture?.error || 'The typed pre-call state was not captured';
         const live = Object.create(null);
         const collect = object => {
             if (!object || typeof object !== 'object' || typeof object.__id !== 'string' || live[object.__id]) return;
@@ -1766,12 +1768,25 @@ __$__.Testize = {
         for (const op of test.operations) {
             const targets = { addEdge: [op.from, op.to], editEdgeReference: [op.from, op.newTo], deleteEdge: [op.from] }[op.editType];
             if (op.editType === 'addNode') {
-                if (!op.isLiteral && (typeof classes[op.label] !== 'function' || classes[op.label] === Object)) return null;
+                if (!op.isLiteral) {
+                    if (typeof classes[op.label] !== 'function' || classes[op.label] === Object) return `Unknown class ${op.label}`;
+                    const definition = capture.classes.find(entry => entry.name === op.label);
+                    if (!definition || definition.instanceError) return definition?.instanceError || `new ${op.label}() was not captured`;
+                }
                 known.add(op.id);
             } else if (op.editType === 'addVariable' || op.editType === 'editVariableReference') {
-                if (op.label !== 'return' || !known.has(op.newTo ?? op.to)) return null;
+                if (op.label !== 'return' || !known.has(op.newTo ?? op.to)) return `Unsupported variable edit ${op.label}`;
             } else if (!targets || !targets.every(id => known.has(id))) {
-                return null;
+                return `Unsupported edit ${op.editType}`;
+            }
+        }
+        const created = Object.create(null);
+        for (const op of test.operations) {
+            if (op.editType !== 'addNode' || op.isLiteral) continue;
+            try {
+                created[op.id] = new classes[op.label]();
+            } catch (error) {
+                return `new ${op.label}() threw: ${error?.message || error}`;
             }
         }
         const literals = Object.create(null);
@@ -1787,7 +1802,7 @@ __$__.Testize = {
                     if (op.isLiteral) {
                         literals[op.id] = op.type === 'number' ? Number(op.label) : op.type === 'boolean' ? op.label === 'true' : op.label;
                     } else {
-                        const object = new classes[op.label]();
+                        const object = created[op.id];
                         Object.setProperty(object, '__id', op.id);
                         Object.setProperty(object, '__ClassName__', op.label);
                         live[op.id] = object;
@@ -2042,8 +2057,14 @@ __$__.Testize = {
             };
         } else {
             // if failed
-            return __$__.Testize.applyMoldEdits(objects, probe, callLabel, context_sensitiveID, classes)
-                || __$__.Testize.override(objects, probe, retObj, callLabel, context_sensitiveID, classes);
+            const reflected = __$__.Testize.applyMoldEdits(objects, probe, callLabel, context_sensitiveID, classes);
+            if (typeof reflected !== 'string') return reflected;
+            // The fallback rebuilds the heap from the display graph, not with MOLD's meaning, so
+            // this demonstration must not be validated or synthesized from its capture.
+            __$__.Testize.storedTest[callLabel][context_sensitiveID].validation = {
+                error: `The demonstration was reflected by the display-graph fallback: ${reflected}`
+            };
+            return __$__.Testize.override(objects, probe, retObj, callLabel, context_sensitiveID, classes);
         }
     },
 
