@@ -1982,11 +1982,14 @@ __$__.Testize = {
 
 
         // use varInfo to make return object which is used to change the variable references
+        // The caller assigns each returned variable with eval, which throws for a const binding,
+        // so a variable that still refers to the demonstrated object is left out.
+        let unchanged = new Set();
         Object.keys(probe).forEach(v => {
             if (v === 'this') return;
             let object = probe[v];
             if (!object || __$__.Traverse.literals[typeof object] ||  object.__id === varInfo[v].to) {
-                // do nothing
+                if (object && varInfo[v] && object.__id === varInfo[v].to) unchanged.add(v);
             } else {
                 variableReferences[v] = runtimeObjects[varInfo[v].to];
             }
@@ -2003,7 +2006,7 @@ __$__.Testize = {
                         variableReferences.__retObj = testData.nodes.get(varInfo[v].to).label;
                 else
                     variableReferences.__retObj = runtimeObjects[varInfo[v].to];
-            } else if (!variableReferences[v]) {
+            } else if (!variableReferences[v] && !unchanged.has(v)) {
                 if (varInfo[v].isLiteral)
                     if (varInfo[v].type === 'number')
                         variableReferences[v] = parseFloat(testData.nodes.get(varInfo[v].to).label);
