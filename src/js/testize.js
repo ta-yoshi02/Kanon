@@ -2108,8 +2108,11 @@ __$__.Testize = {
             // Runtime scoped IDs are unstable across re-synthesis; compare by structure instead.
             info_expected.id = info_actual.id;
         }
+        // A literal is a value, so it matches any literal with the same label: a field that copies
+        // another object's value points at that object's literal in the demonstration, while the
+        // run draws a literal of its own. Only objects are compared by identity.
         let isMatching = (info_actual.prop.length === info_expected.prop.length)
-                      && (info_actual.id          === info_expected.id)
+                      && (info_actual.id          === info_expected.id || (info_actual.literal && info_expected.literal))
                       && (info_actual.label       === info_expected.label)
                       && (!info_actual.literal    === !info_expected.literal);
 
