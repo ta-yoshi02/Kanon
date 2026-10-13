@@ -8,10 +8,11 @@ const refsynDir = process.env.REFSYN_DIR
   ? resolve(process.env.REFSYN_DIR)
   : resolve(rootDir, "..");
 
-const fixturePath = resolve(rootDir, "json/refsyn-append-request.json");
+const fixturePath = resolve(rootDir, "json/refsyn-insert-request.json");
 const wasmJsPath = resolve(refsynDir, "web/pkg/refsyn.js");
 const wasmPath = resolve(refsynDir, "web/pkg/refsyn_bg.wasm");
 const adapterPath = resolve(refsynDir, "runtime/refsyn-escher-adapter.mjs");
+const validatorPath = resolve(refsynDir, "runtime/whole-method-validation.mjs");
 
 const request = JSON.parse(await readFile(fixturePath, "utf8"));
 const wasm = await import(pathToFileURL(wasmJsPath).href);
@@ -24,10 +25,10 @@ const rawArtifacts = wasm.synthesize_browser(
 );
 const artifacts = JSON.parse(rawArtifacts);
 const response = JSON.parse(JSON.stringify(artifacts.response));
+const tasks = artifacts.task_json ? JSON.parse(artifacts.task_json) : [];
 
 if (artifacts.task_json) {
   const { applyRefsynTaskOutcomes, runRefsynTasks } = await import(pathToFileURL(adapterPath).href);
-  const tasks = JSON.parse(artifacts.task_json);
   const outcomes = runRefsynTasks(tasks, {
     quiet: true,
     maxCost: 20,
@@ -54,9 +55,18 @@ assert(
 assert(Array.isArray(response.individual_codes) && response.individual_codes.length > 0, "individual_codes is empty");
 assert(Array.isArray(response.escher_results) && response.escher_results.length > 0, "escher_results is empty");
 
+// The page adopts a method only after this check, so the existence of code above is not enough.
+const { validateWholeMethod } = await import(pathToFileURL(validatorPath).href);
+const validation = validateWholeMethod({ request, response, taskNames: tasks.map((task) => task.name) });
+assert(
+  validation.status === "passed" && validation.checked_demonstrations === request.method_calls.length,
+  `whole-method validation did not pass: ${JSON.stringify(validation)}`,
+);
+
 console.log(JSON.stringify({
   common_pattern: response.common_pattern,
   composed_method_code: response.composed_method_code,
   individual_codes: response.individual_codes,
   escher_results: response.escher_results,
+  validation,
 }, null, 2));
