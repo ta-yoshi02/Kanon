@@ -6,6 +6,7 @@ const validator = path.resolve(__dirname, '../../../../scripts/validate_method.m
 let warn;
 beforeEach(() => {
     __$__.Testize.storedCallArguments = {};
+    __$__.Testize.fallbackReflection = undefined;
     __$__.Testize.storedTest = {};
     __$__.Testize.storedActualGraph = {};
     __$__.Testize.callParenthesisPos = {};
@@ -301,5 +302,70 @@ describe('testAndOverride', () => {
         const test = __$__.Testize.storedTest.call.ctx;
         expect(__$__.Testize.validationPayload([{}], [test.validation]).error).toMatch(/display-graph/);
         jest.restoreAllMocks();
+    });
+});
+
+describe('captures used for synthesis', () => {
+    async function requestFor(label = 'call') {
+        const dispatch = jest.spyOn(__$__.Testize, 'dispatchSynthesisRequest').mockResolvedValue(null);
+        __$__.Testize.synthesize(); await Promise.resolve();
+        const request = dispatch.mock.calls[0][0];
+        dispatch.mockRestore();
+        return request;
+    }
+    function fallBack(a, b) {
+        jest.spyOn(__$__.Testize, 'checkActualGraph').mockReturnValue(false);
+        jest.spyOn(__$__.Testize, 'override').mockReturnValue({ newObjects: [], variableReferences: {} });
+        __$__.Testize.storedTest.call.ctx.operations = [{ editType: 'deleteNode', id: 'b' }];
+        __$__.Testize.testAndOverride([a, b], { this: a }, undefined, 'call', 'ctx', false, { Parcel: Object.getPrototypeOf(a).constructor });
+        jest.restoreAllMocks();
+    }
+
+    test('a fallback invalidates every later capture of the run, and the next run starts clean', () => {
+        const { a, b, snapshot } = capture();
+        installTest(snapshot);
+        fallBack(a, b);
+        __$__.Testize.storeCallArguments('later', 'ctx', [], a, [a, b]);
+        expect(__$__.Testize.storedCallArguments.later.ctx.validation.error).toMatch(/earlier demonstration \(call\).*fallback/);
+        __$__.Testize.initialize();
+        __$__.Testize.storeCallArguments('later', 'ctx', [], a, [a, b]);
+        expect(__$__.Testize.storedCallArguments.later.ctx.validation.error).toBeUndefined();
+    });
+
+    test('a demonstration recorded after a fallback is not synthesized once the fallen-back one is removed', async () => {
+        const { a, b, snapshot } = capture();
+        installTest(snapshot);
+        fallBack(a, b);
+        __$__.Testize.storeCallArguments('call', 'later', [], a, [a, b]);
+        const later = __$__.Testize.storedCallArguments.call.later.validation;
+        // The fallen-back demonstration is deleted; only the later one remains.
+        installTest(later);
+        __$__.Testize.storedTest.call = { later: __$__.Testize.storedTest.call.ctx };
+        expect((await requestFor()).validation.error).toMatch(/fallback/);
+    });
+
+    test('a saved capture is refused when the latest run reaches a different pre-call state', async () => {
+        const { a, b, snapshot } = capture();
+        installTest(snapshot);
+        expect((await requestFor()).validation.error).toBeUndefined();
+        a.data = 8;
+        __$__.Testize.storeCallArguments('call', 'ctx', [], a, [a, b]);
+        expect((await requestFor()).validation.error).toMatch(/changed since the demonstration was recorded/);
+        __$__.Testize.storedCallArguments = {};
+        expect((await requestFor()).validation.error).toMatch(/not reached in the latest run/);
+    });
+
+    test('the same pre-call state with properties created in another order is still accepted', async () => {
+        const { snapshot } = capture();
+        installTest(snapshot);
+        const Parcel = new Function(`${source}; return Parcel;`)();
+        const a = Object.create(Parcel.prototype), b = new Parcel();
+        Object.setProperty(a, '__id', 'a');
+        Object.setProperty(b, '__id', 'b');
+        a.unset = undefined; a.link = b; a.data = 7; b.link = a;
+        __$__.Testize.storeCallArguments('call', 'ctx', [], a, [a, b]);
+        const request = await requestFor();
+        expect(request.validation.error).toBeUndefined();
+        expect(request.validation.cases).toHaveLength(1);
     });
 });

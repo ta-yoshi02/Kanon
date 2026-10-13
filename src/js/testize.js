@@ -24,6 +24,8 @@ __$__.Testize = {
     enable: false,
     storedTest: {},
     storedCallArguments: {},
+    // Label of the first demonstration in the current run reflected by the display-graph fallback.
+    fallbackReflection: undefined,
     storedtext: [],
     storedActualGraph: {},
     window: {},
@@ -205,6 +207,7 @@ __$__.Testize = {
         __$__.Testize.callParenthesisPos = {};
         __$__.Testize.callMethodNameByLabel = {};
         __$__.Testize.storedCallArguments = {};
+        __$__.Testize.fallbackReflection = undefined;
     },
 
 
@@ -1040,6 +1043,26 @@ __$__.Testize = {
         }
     },
 
+    // A saved capture is used only while the latest run still reaches the same pre-call state;
+    // otherwise the recorded edits no longer describe what execution would do.
+    validationCaptureForSynthesis(saved, latest) {
+        if (!saved || saved.error) return saved && JSON.parse(JSON.stringify(saved));
+        if (!latest) return { error: 'The demonstration was not reached in the latest run; run the program again' };
+        if (latest.error) return { error: latest.error };
+        // Property order is not part of the state, so objects and fields are compared by name.
+        const canonical = example => JSON.stringify({
+            arguments: example.arguments,
+            values: Object.entries(example.values || {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+            objects: example.objects
+                .map(object => [object.id, object.className, Object.entries(object.fields).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))])
+                .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+        });
+        if (canonical(saved.example) !== canonical(latest.example)) {
+            return { error: 'The pre-call state changed since the demonstration was recorded; record it again' };
+        }
+        return JSON.parse(JSON.stringify(saved));
+    },
+
     validationPayload(methodCalls, captures) {
         const classes = new Map();
         const cases = [];
@@ -1101,6 +1124,10 @@ __$__.Testize = {
         if (Array.isArray(roots)) {
             stored.checkValidationState = () => __$__.Testize.captureValidationState(callLabel, context_sensitiveID, args, receiver, roots);
             stored.validation = stored.checkValidationState();
+            // After a fallback the heap is no longer one that executing the demonstrations reaches.
+            if (__$__.Testize.fallbackReflection !== undefined && !stored.validation.error) {
+                stored.validation = { error: `An earlier demonstration (${__$__.Testize.fallbackReflection}) was reflected by the display-graph fallback, so this pre-call state is not reachable by execution` };
+            }
         }
         __$__.Testize.storedCallArguments[callLabel][context_sensitiveID] = stored;
     },
@@ -1260,7 +1287,7 @@ __$__.Testize = {
                 }
 
                 methodCalls.push(methodCallEntry);
-                const capture = test.validation ? JSON.parse(JSON.stringify(test.validation)) : undefined;
+                const capture = __$__.Testize.validationCaptureForSynthesis(test.validation, runtimeCallArgs?.validation);
                 if (capture?.example) {
                     const normalize = id => __$__.Testize.normalizeIdWithRuntimeMap(id, runtimeToTempMap, runtimeAliasMap);
                     const normalizeValue = value => value && typeof value.ref === 'string' ? { ref: normalize(value.ref) } : value;
@@ -2061,6 +2088,7 @@ __$__.Testize = {
             if (typeof reflected !== 'string') return reflected;
             // The fallback rebuilds the heap from the display graph, not with MOLD's meaning, so
             // this demonstration must not be validated or synthesized from its capture.
+            if (__$__.Testize.fallbackReflection === undefined) __$__.Testize.fallbackReflection = callLabel;
             __$__.Testize.storedTest[callLabel][context_sensitiveID].validation = {
                 error: `The demonstration was reflected by the display-graph fallback: ${reflected}`
             };
