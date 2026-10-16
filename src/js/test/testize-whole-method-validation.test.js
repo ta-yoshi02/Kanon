@@ -92,6 +92,24 @@ test('blocks unverified and failed responses before any editor mutation', async 
         expect(__$__.editor.session.insert).not.toHaveBeenCalled();
     }
 });
+test('keeps the latest outcome and the reason it was not applied, without showing it', async () => {
+    installTest(capture().snapshot);
+    const editor = useEditor(source);
+    const failed = { status: 'failed', checked_demonstrations: 0, error: 'state differs' };
+    for (const [validation, reason] of [
+        [undefined, 'validation missing'],
+        [failed, 'validation failed'],
+        [{ status: 'passed', checked_demonstrations: 0 }, 'validated 0 of 1 demonstrations'],
+    ]) {
+        await synthesizeWith({ composed_method_code: 'cut() {}', code: [], validation });
+        expect(__$__.Testize.lastSynthesis).toMatchObject({ applied: false, reason, demonstrations: 1, validation: validation ?? null });
+    }
+    await synthesizeWith(null);
+    expect(__$__.Testize.lastSynthesis).toMatchObject({ applied: false, reason: 'no response' });
+    await synthesizeWith({ composed_method_code: 'cut() { this.link = null; }', code: [], validation: passed });
+    expect(__$__.Testize.lastSynthesis).toMatchObject({ applied: true, reason: null, validation: passed });
+    expect(editor.text()).not.toBe(source);
+});
 test('rejects stale source and a heap already mutated by the old method', () => {
     const { a, b, snapshot } = capture();
     __$__.editor.getValue = () => source + '\n// changed';

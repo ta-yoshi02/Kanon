@@ -1324,12 +1324,21 @@ __$__.Testize = {
             validation: __$__.Testize.validationPayload(methodCalls, validationCaptures)
         })
         .then(data => {
+            // 画面には出さず、直近の結果と反映しなかった理由を保持する
+            const record = (applied, reason) => {
+                __$__.Testize.lastSynthesis = { applied, reason, demonstrations: methodCalls.length, validation: data?.validation ?? null, response: data ?? null };
+            };
             if (!data) {
+                record(false, 'no response');
                 console.warn("合成結果なし");
                 return;
             }
 
-            if (data.validation?.status !== "passed" || data.validation.checked_demonstrations !== methodCalls.length || synthesisSource !== __$__.editor.getValue?.()) {
+            const notAdopted = data.validation?.status !== "passed" ? `validation ${data.validation?.status ?? 'missing'}`
+                : data.validation.checked_demonstrations !== methodCalls.length ? `validated ${data.validation.checked_demonstrations} of ${methodCalls.length} demonstrations`
+                : synthesisSource !== __$__.editor.getValue?.() ? 'source changed during synthesis' : null;
+            if (notAdopted) {
+                record(false, notAdopted);
                 console.warn("合成結果は未検証または実演に不一致のため反映しません", data.validation);
                 return;
             }
@@ -1356,12 +1365,17 @@ __$__.Testize = {
                     ? __$__.Testize.buildValidatedSource(synthesisSource, receiverClassName, methodName, data.composed_method_code, Array.isArray(data.code) ? data.code : [])
                     : { error: 'Demonstrations target different methods' };
                 if (built.error) {
+                    record(false, built.error);
                     console.warn(`検証済みコードを反映できません: ${built.error}`);
                 } else {
                     __$__.Testize.applySourceEdits(synthesisSource, built.edits);
                     replacedMethod = true;
-                    if (__$__.editor.getValue() !== built.source) console.warn('エディタへの反映結果が検証済みのソースと一致しません');
+                    const mismatch = __$__.editor.getValue() !== built.source;
+                    record(true, mismatch ? 'editor differs from the validated source' : null);
+                    if (mismatch) console.warn('エディタへの反映結果が検証済みのソースと一致しません');
                 }
+            } else {
+                record(false, 'no composed method');
             }
 
             if (!replacedMethod) {
@@ -1400,6 +1414,7 @@ __$__.Testize = {
             }
         })
         .catch(err => {
+            __$__.Testize.lastSynthesis = { applied: false, reason: `error: ${err?.message ?? err}`, demonstrations: methodCalls.length, validation: null, response: null };
             console.error("合成中にエラー:", err);
         });
     },
