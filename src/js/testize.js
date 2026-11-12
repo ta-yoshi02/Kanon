@@ -66,6 +66,8 @@ __$__.Testize = {
                     document.getElementById('saveButtonForTestize').onclick = __$__.Testize.saveDataWithCallback.bind(this, data, callback, editType, null);
                     document.getElementById('cancelButtonForTestize').onclick = __$__.Testize.cancelEdit.bind(this, callback);
                     document.getElementById('isLiteral').style.display = 'inline';
+                    // Otherwise the box keeps the previous node's choice, as double-click Add Node already avoids.
+                    document.getElementById('checkboxForLiteral').checked = false;
                     document.getElementById('network-popUp').style.display = 'block';
                     document.getElementById('node-label').focus();
                 },
