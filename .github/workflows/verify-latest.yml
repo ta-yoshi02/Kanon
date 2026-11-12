@@ -88,6 +88,14 @@ jobs:
       - name: Build GitHub Pages artifact
         run: npm run build-pages
 
+      # Records the insert demonstrations through the Kanon UI in Chromium and checks that the
+      # validated method is applied, and that a synthesis Worker that cannot load is reported.
+      - name: Install Chromium for the UI check
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify synthesis through the Kanon UI in Chromium
+        run: npm run verify-refsyn-ui
+
       - name: Sanity-check bundled runtime paths
         run: |
           test -f dist/src/js/vendor/refsyn-browser-runtime.js
